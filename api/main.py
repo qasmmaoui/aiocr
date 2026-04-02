@@ -1,0 +1,172 @@
+"""
+╔══════════════════════════════════════════════════════════════╗
+║  DMSI · Adala — FastAPI Backend                              ║
+║  api/main.py                                                 ║
+╚══════════════════════════════════════════════════════════════╝
+Routes :
+    POST /api/upload           — Upload + extraction + indexation
+    GET  /api/search           — Recherche full-text
+    GET  /api/documents        — Liste des documents indexés
+    DELETE /api/documents/{id} — Suppression
+    GET  /api/stats            — Statistiques de l'index
+    GET  /api/health           — Santé du service
+    GET  /api/pdf/{filename}   — Téléchargement du PDF original
+    GET  /api/documents/{id}/text — Export texte brut
+"""
+
+import sys
+from pathlib import Path
+
+# ── Garantit que la racine du projet est dans sys.path ───────────────────
+# Nécessaire quelle que soit la façon dont uvicorn est lancé
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+# ─────────────────────────────────────────────────────────────────────────
+
+import base64 as _b64
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+
+from core.config import API_TITLE, API_VERSION
+from core.utils import pdf_hash
+from services.extraction_service import (
+    extract_pdf,
+    save_uploaded_pdf,
+    load_cache,
+    save_cache,
+    merge_cache_into_pages,
+    get_pdf_path,
+    export_pages_as_text,
+)
+from services.ocr_service import run_ocr_on_pages
+from search.indexer import DocumentIndexer
+
+# ── App ───────────────────────────────────────────────────────────────────
+app = FastAPI(title=API_TITLE, version=API_VERSION)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Singleton indexeur ────────────────────────────────────────────────────
+_indexer: DocumentIndexer | None = None
+
+def get_indexer() -> DocumentIndexer:
+    global _indexer
+    if _indexer is None:
+        _indexer = DocumentIndexer()
+    return _indexer
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  ROUTES
+# ═════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "version": API_VERSION}
+
+
+@app.get("/api/stats")
+def stats():
+    return get_indexer().stats()
+
+
+@app.get("/api/documents")
+def list_documents():
+    return get_indexer().list_documents()
+
+
+@app.delete("/api/documents/{doc_id}")
+def delete_document(doc_id: str):
+    get_indexer().remove_document(doc_id)
+    return {"deleted": doc_id}
+
+
+@app.get("/api/pdf/{filename}")
+def download_pdf(filename: str):
+    path = get_pdf_path(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
+    return FileResponse(path=str(path), media_type="application/pdf", filename=filename)
+
+
+@app.post("/api/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Upload un PDF, extrait le texte et l'indexe."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
+
+    content   = await file.read()
+    file_hash = pdf_hash(content)
+
+    save_uploaded_pdf(file.filename, content)
+
+    result     = extract_pdf(content)
+    pages      = result["pages"]
+    from_cache = False
+
+    cached = load_cache(file_hash)
+    if cached:
+        merge_cache_into_pages(pages, cached)
+        from_cache = True
+    else:
+        if result["n_scan"] > 0:
+            run_ocr_on_pages(pages)
+        save_cache(file_hash, result)
+
+    get_indexer().index_document(file_hash, file.filename, pages)
+
+    return {
+        "doc_id":     file_hash,
+        "filename":   file.filename,
+        "nb_pages":   result["nb_pages"],
+        "n_native":   result["n_native"],
+        "n_scan":     result["n_scan"],
+        "doc_type":   result["doc_type"],
+        "from_cache": from_cache,
+        "pages": [
+            {
+                "num":        p["num"],
+                "type":       p["type"],
+                "text":       p["text"],
+                "preview_b64": _b64.b64encode(p["preview"]).decode()
+                               if isinstance(p.get("preview"), bytes)
+                               else p.get("preview_b64", ""),
+            }
+            for p in pages
+        ],
+    }
+
+
+@app.get("/api/search")
+def search(q: str = Query(..., min_length=1)):
+    return get_indexer().search(q)
+
+
+@app.get("/api/documents/{doc_id}/text")
+def export_text(doc_id: str):
+    indexer = get_indexer()
+    doc = indexer.docs.get(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+    pages_text = [
+        {"num": int(k), "text": v}
+        for k, v in sorted(doc["p"].items(), key=lambda x: int(x[0]))
+    ]
+    text = export_pages_as_text(pages_text)
+    return JSONResponse(content={"doc_id": doc_id, "filename": doc["fn"], "text": text})
+
+
+# ── Point d'entrée direct ─────────────────────────────────────────────────
+if __name__ == "__main__":
+    import uvicorn
+    from core.config import API_HOST, API_PORT
+    uvicorn.run("api.main:app", host=API_HOST, port=API_PORT, reload=True)

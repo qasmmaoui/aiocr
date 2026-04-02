@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Données locales (ne pas pousser les PDFs et l'index)
+data/uploads/
+data/cache_corrections/
+data/search_index/
+
+# Streamlit
+.streamlit/config.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/ 

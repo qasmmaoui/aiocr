@@ -1,0 +1,25 @@
+# ╔══════════════════════════════════════════════════════════╗
+# ║  DMSI · Adala — Dépendances Python                       ║
+# ╚══════════════════════════════════════════════════════════╝
+
+# ── Backend API ──────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12        # Requis pour UploadFile FastAPI
+
+# ── Frontend UI ──────────────────────────────────────────────
+streamlit==1.40.2
+
+# ── PDF / OCR ────────────────────────────────────────────────
+PyMuPDF==1.24.14                # fitz — extraction native
+pytesseract==0.3.13             # OCR Tesseract (optionnel)
+Pillow==11.0.0                  # Manipulation d'images
+
+# ── LLM Vision (fallback OCR) ────────────────────────────────
+ollama==0.3.3                   # Client Ollama local
+
+# ── HTTP Client ──────────────────────────────────────────────
+requests==2.32.3
+
+# ── Utilitaires ──────────────────────────────────────────────
+python-dotenv==1.0.1            # Variables d'environnement (optionnel)
