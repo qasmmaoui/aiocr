@@ -7,7 +7,7 @@
 ## 📐 Architecture
 
 ```
-adala_app/
+aiocr/
 │
 ├── app.py                        # 🖥️  Frontend Streamlit  (UI)
 │
@@ -80,8 +80,8 @@ Utilisateur (navigateur)
 ### 1. Cloner le dépôt
 
 ```bash
-git clone https://github.com/<votre-org>/adala_app.git
-cd adala_app
+git clone https://github.com/<votre-org>/aiocr.git
+cd aiocr
 ```
 
 ### 2. Créer un environnement virtuel
