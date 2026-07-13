@@ -10,6 +10,24 @@ Description :
 """
 
 import re
+import unicodedata
+
+
+# ── Nettoyage léger (formes de présentation → arabe standard) ──────────────
+def light_clean(text: str) -> str:
+    """
+    Nettoyage sûr, sans heuristiques destructrices :
+      - NFKC : convertit les glyphes de présentation (ﻻ ﻣ …) en arabe standard (لا م …)
+      - supprime la kashida (ـ)
+      - normalise les espaces
+    À utiliser pour le texte natif (PDF) et la sortie du modèle vision (déjà propre).
+    """
+    text = unicodedata.normalize("NFKC", text or "")
+    text = text.replace("ـ", "")            # kashida
+    text = re.sub(r"[ \t]+", " ", text)     # espaces multiples
+    text = re.sub(r"[ \t]+\n", "\n", text)  # espaces en fin de ligne
+    return text.strip()
+
 
 # ── Dictionnaire de corrections ───────────────────────────────────────────
 OCR_DICT: dict[str, str] = {
@@ -201,6 +219,9 @@ def correct_text(text: str) -> tuple[str, list[str]]:
         (texte_corrigé, liste_des_corrections_appliquées)
     """
     applied: list[str] = []
+
+    # 0. Formes de présentation → arabe standard (avant toute heuristique)
+    text = unicodedata.normalize("NFKC", text or "")
 
     # 1. Dictionnaire statique
     for wrong, right in OCR_DICT.items():

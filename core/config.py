@@ -33,9 +33,9 @@ N_THREADS = max(2, CPU - 2)
 
 LLM_OPTIONS = {
     "num_thread":  N_THREADS,
-    "num_ctx":     512,
-    "num_predict": 800,
-    "temperature": 0,
+    "num_ctx":     8192,    # assez large pour une page dense (évite la troncature)
+    "num_predict": 4096,    # autorise la transcription complète d'une page
+    "temperature": 0,       # déterministe : idéal pour l'OCR
 }
 
 

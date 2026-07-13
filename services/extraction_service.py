@@ -19,7 +19,7 @@ import fitz  # PyMuPDF
 
 from core.config import DIR_CACHE, DIR_UPLOAD
 from core.utils import pdf_hash
-from services.correction_service import correct_text
+from services.correction_service import correct_text, light_clean
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -112,7 +112,9 @@ def extract_pdf(pdf_bytes: bytes) -> dict:
     for page in doc:
         raw = page.get_text()
         page_type = _classify_page(raw)
-        corrected, _ = correct_text(raw.strip())
+        # Texte natif : nettoyage léger uniquement (les heuristiques OCR
+        # corrompraient un texte déjà correct). L'OCR se fait plus tard.
+        corrected = light_clean(raw.strip())
 
         # Aperçu basse résolution (pour l'UI)
         preview_pix = page.get_pixmap(
@@ -120,19 +122,23 @@ def extract_pdf(pdf_bytes: bytes) -> dict:
             colorspace=fitz.csRGB,
             alpha=False,
         )
-        # Image haute résolution en niveaux de gris (pour l'OCR)
-        ocr_pix = page.get_pixmap(
-            matrix=fitz.Matrix(2.5, 2.5),
-            colorspace=fitz.csGRAY,
-            alpha=False,
-        )
+        # Image haute résolution (300 DPI) — uniquement pour les pages 'scan'
+        # (les pages natives n'ont pas besoin d'OCR : on évite un rendu coûteux)
+        image_b64 = ""
+        if page_type == "scan":
+            ocr_pix = page.get_pixmap(
+                dpi=300,
+                colorspace=fitz.csGRAY,
+                alpha=False,
+            )
+            image_b64 = base64.b64encode(ocr_pix.tobytes("png")).decode()
 
         pages.append(
             {
                 "num":       page.number + 1,
                 "type":      page_type,
                 "text":      corrected,
-                "image_b64": base64.b64encode(ocr_pix.tobytes("png")).decode(),
+                "image_b64": image_b64,
                 "preview":   preview_pix.tobytes("png"),
             }
         )
