@@ -44,6 +44,10 @@ from services.extraction_service import (
 from services.ocr_service import run_ocr_on_pages
 from search.indexer import DocumentIndexer
 
+from pydantic import BaseModel
+from rag.search_laws import search_laws
+from rag.answer import answer as rag_answer
+
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(title=API_TITLE, version=API_VERSION)
 
@@ -163,6 +167,27 @@ def export_text(doc_id: str):
     ]
     text = export_pages_as_text(pages_text)
     return JSONResponse(content={"doc_id": doc_id, "filename": doc["fn"], "text": text})
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  RAG JURIDIQUE — recherche sémantique + chat ancré (grounded)
+# ═════════════════════════════════════════════════════════════════════════
+
+class ChatRequest(BaseModel):
+    question: str
+    k: int = 6
+
+
+@app.get("/api/laws/search")
+def laws_search(q: str = Query(..., min_length=1), k: int = 6):
+    """Recherche sémantique dans le corpus juridique (Qdrant + bge-m3)."""
+    return {"query": q, "results": search_laws(q, limit=k)}
+
+
+@app.post("/api/chat")
+def chat(req: ChatRequest):
+    """Chat juridique : réponse ancrée sur les articles récupérés + citations."""
+    return rag_answer(req.question, k=req.k)
 
 
 # ── Point d'entrée direct ─────────────────────────────────────────────────

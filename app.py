@@ -32,7 +32,7 @@ st.set_page_config(
 def api(method: str, path: str, **kwargs):
     url = f"{API_BASE_URL}{path}"
     try:
-        r = getattr(requests, method)(url, timeout=180, **kwargs)
+        r = getattr(requests, method)(url, timeout=600, **kwargs)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError:
@@ -46,6 +46,7 @@ def api(method: str, path: str, **kwargs):
 st.session_state.setdefault("sq", "")
 st.session_state.setdefault("docs", None)
 st.session_state.setdefault("stats", None)
+st.session_state.setdefault("chat", [])
 
 # ── CSS ───────────────────────────────────────────────────────────────────
 st.markdown("""<style>
@@ -171,7 +172,51 @@ st.markdown(f"""
 # ══════════════════════════════════════════════════════════════════════════
 #  3. WORKSPACE
 # ══════════════════════════════════════════════════════════════════════════
-tab_up, tab_lib = st.tabs(["📤  رفع وتحليل وثيقة", "📁  وثائقي"])
+tab_chat, tab_up, tab_lib = st.tabs(["💬  المساعد القانوني", "📤  رفع وتحليل", "📁  وثائقي"])
+
+# ── Onglet 0 : Chat juridique (RAG ancré sur le corpus) ─────────────────────
+with tab_chat:
+    st.markdown(
+        '<div class="sect-intro">اطرح سؤالاً حول <b>القانون التجاري المغربي</b>. '
+        'تُبنى الإجابات حصرياً على النصوص القانونية المُفهرسة، مع ذكر المصادر.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if not st.session_state.chat:
+        st.markdown(
+            '<div class="es"><h3>💬 ابدأ محادثة قانونية</h3>'
+            '<p>مثال: «ما هي شروط تأسيس شركة مساهمة؟» أو «ما هي عقوبة التزوير في محضر صفقة؟»</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    for m in st.session_state.chat:
+        with st.chat_message(m["role"], avatar=("🧑" if m["role"] == "user" else "⚖️")):
+            st.markdown(m["content"])
+            if m.get("sources"):
+                with st.expander(f"📚 المصادر القانونية ({len(m['sources'])})"):
+                    for s in m["sources"]:
+                        st.markdown(
+                            f"**{s.get('law','')}**  ·  `{s.get('score','')}`\n\n"
+                            f"> {s.get('excerpt','')}…"
+                        )
+
+    with st.form("chat_form", clear_on_submit=True):
+        cc1, cc2 = st.columns([20, 3])
+        cq = cc1.text_input("q", placeholder="اكتب سؤالك القانوني هنا…",
+                            label_visibility="collapsed")
+        csend = cc2.form_submit_button("إرسال", use_container_width=True)
+
+    if csend and cq.strip():
+        st.session_state.chat.append({"role": "user", "content": cq.strip()})
+        with st.spinner("⏳ أبحث في النصوص القانونية وأحضّر الإجابة…"):
+            res = api("post", "/api/chat", json={"question": cq.strip()})
+        if res:
+            st.session_state.chat.append({
+                "role": "assistant",
+                "content": res.get("answer", ""),
+                "sources": res.get("sources", []),
+            })
+        st.rerun()
 
 # ── Onglet 1 : Upload & extraction ─────────────────────────────────────────
 with tab_up:
