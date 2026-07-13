@@ -12,6 +12,7 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+import json
 import base64
 import requests
 import streamlit as st
@@ -19,6 +20,17 @@ import streamlit.components.v1 as components
 
 from core.config import API_BASE_URL
 from search.engine import highlight_matches
+
+
+def _render_sources(sources: list) -> None:
+    if not sources:
+        return
+    with st.expander(f"📚 المصادر القانونية ({len(sources)})"):
+        for s in sources:
+            st.markdown(
+                f"**{s.get('law', '')}**  ·  `{s.get('score', '')}`\n\n"
+                f"> {s.get('excerpt', '')}…"
+            )
 
 # ── Configuration ─────────────────────────────────────────────────────────
 st.set_page_config(
@@ -120,6 +132,16 @@ p, span, div, label, li, td, th, h1, h2, h3, h4, h5,
 [data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color:#0b192c !important; font-weight:700 !important; }
 [data-testid="stTextInput"] input { border-radius:10px !important; border:1px solid #dfe3e8 !important; direction:rtl !important; text-align:right !important; padding:12px 16px !important; }
 .stAlert p { color:#1f2937 !important; }
+
+/* ── Chat ── */
+[data-testid="stChatMessage"] { direction:rtl; text-align:right; background:#fff; border:1px solid #e8eaed; border-radius:16px; box-shadow:0 1px 6px rgba(0,0,0,.04); margin-bottom:12px; padding:6px 10px; }
+[data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li { color:#1f2937 !important; line-height:1.95; }
+[data-testid="stChatMessage"] code { background:#eef2f7; color:#0b192c !important; padding:1px 6px; border-radius:6px; font-size:.85em; }
+[data-testid="stChatMessage"] blockquote { border-right:3px solid #d1ab66; border-left:none; background:#f9fafb; padding:8px 14px; margin:8px 0; color:#4b5563 !important; border-radius:0 8px 8px 0; }
+[data-testid="stChatMessage"] strong { color:#0b192c !important; }
+form[data-testid="stForm"] { border:none !important; padding:0 !important; }
+[data-testid="stFormSubmitButton"] button { background:#0b192c !important; color:#fff !important; font-weight:700 !important; border:none !important; border-radius:10px !important; }
+[data-testid="stFormSubmitButton"] button * { color:#fff !important; }
 </style>""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -174,48 +196,87 @@ st.markdown(f"""
 # ══════════════════════════════════════════════════════════════════════════
 tab_chat, tab_up, tab_lib = st.tabs(["💬  المساعد القانوني", "📤  رفع وتحليل", "📁  وثائقي"])
 
-# ── Onglet 0 : Chat juridique (RAG ancré sur le corpus) ─────────────────────
+# ── Onglet 0 : Chat juridique (RAG, streaming) ──────────────────────────────
 with tab_chat:
-    st.markdown(
-        '<div class="sect-intro">اطرح سؤالاً حول <b>القانون التجاري المغربي</b>. '
-        'تُبنى الإجابات حصرياً على النصوص القانونية المُفهرسة، مع ذكر المصادر.</div>',
-        unsafe_allow_html=True,
-    )
-
-    if not st.session_state.chat:
+    ch1, ch2 = st.columns([6, 1.5])
+    with ch1:
         st.markdown(
-            '<div class="es"><h3>💬 ابدأ محادثة قانونية</h3>'
-            '<p>مثال: «ما هي شروط تأسيس شركة مساهمة؟» أو «ما هي عقوبة التزوير في محضر صفقة؟»</p></div>',
+            '<div class="sect-intro">اطرح سؤالاً حول <b>القانون المغربي</b> (تجاري وجنائي). '
+            'الإجابات مبنيّة حصرياً على النصوص القانونية المُفهرسة، مع ذكر المصادر.</div>',
             unsafe_allow_html=True,
         )
+    with ch2:
+        if st.session_state.chat and st.button("🗑️ محادثة جديدة",
+                                               use_container_width=True, key="newchat"):
+            st.session_state.chat = []
+            st.rerun()
 
+    # Historique
     for m in st.session_state.chat:
         with st.chat_message(m["role"], avatar=("🧑" if m["role"] == "user" else "⚖️")):
             st.markdown(m["content"])
-            if m.get("sources"):
-                with st.expander(f"📚 المصادر القانونية ({len(m['sources'])})"):
-                    for s in m["sources"]:
-                        st.markdown(
-                            f"**{s.get('law','')}**  ·  `{s.get('score','')}`\n\n"
-                            f"> {s.get('excerpt','')}…"
-                        )
+            _render_sources(m.get("sources"))
 
+    pending = None
+
+    # Suggestions de départ (conversation vide)
+    if not st.session_state.chat:
+        st.markdown('<div class="es"><h3>💬 كيف يمكنني مساعدتك اليوم؟</h3>'
+                    '<p>اختر سؤالاً للبدء، أو اكتب سؤالك في الأسفل.</p></div>',
+                    unsafe_allow_html=True)
+        starters = [
+            "ما هي شروط تأسيس شركة مساهمة؟",
+            "ما هي عقوبة التزوير في وثيقة رسمية؟",
+            "ما هي حقوق المتهم أثناء التحقيق؟",
+            "ما هي مسطرة تصفية شركة تجارية؟",
+        ]
+        sc = st.columns(2)
+        for i, s in enumerate(starters):
+            if sc[i % 2].button(s, key=f"start_{i}", use_container_width=True):
+                pending = s
+
+    # Zone de saisie
     with st.form("chat_form", clear_on_submit=True):
-        cc1, cc2 = st.columns([20, 3])
-        cq = cc1.text_input("q", placeholder="اكتب سؤالك القانوني هنا…",
+        fc1, fc2 = st.columns([20, 3])
+        cq = fc1.text_input("q", placeholder="اكتب سؤالك القانوني هنا…",
                             label_visibility="collapsed")
-        csend = cc2.form_submit_button("إرسال", use_container_width=True)
+        if fc2.form_submit_button("إرسال ➤", use_container_width=True) and cq.strip():
+            pending = cq.strip()
 
-    if csend and cq.strip():
-        st.session_state.chat.append({"role": "user", "content": cq.strip()})
-        with st.spinner("⏳ أبحث في النصوص القانونية وأحضّر الإجابة…"):
-            res = api("post", "/api/chat", json={"question": cq.strip()})
-        if res:
-            st.session_state.chat.append({
-                "role": "assistant",
-                "content": res.get("answer", ""),
-                "sources": res.get("sources", []),
-            })
+    # Génération en streaming
+    if pending:
+        st.session_state.chat.append({"role": "user", "content": pending})
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(pending)
+        with st.chat_message("assistant", avatar="⚖️"):
+            _src = {"v": []}
+
+            def _stream():
+                try:
+                    r = requests.post(
+                        f"{API_BASE_URL}/api/chat/stream",
+                        json={"question": pending}, stream=True, timeout=600,
+                    )
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line.decode("utf-8"))
+                        except Exception:
+                            continue
+                        if "sources" in obj:
+                            _src["v"] = obj["sources"]
+                        elif "delta" in obj:
+                            yield obj["delta"]
+                except Exception as e:  # noqa: BLE001
+                    yield f"❌ خطأ في الاتصال بالخدمة: {e}"
+
+            full = st.write_stream(_stream())
+            _render_sources(_src["v"])
+
+        st.session_state.chat.append(
+            {"role": "assistant", "content": full or "", "sources": _src["v"]}
+        )
         st.rerun()
 
 # ── Onglet 1 : Upload & extraction ─────────────────────────────────────────

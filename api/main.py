@@ -28,7 +28,7 @@ import base64 as _b64
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from core.config import API_TITLE, API_VERSION
 from core.utils import pdf_hash
@@ -46,7 +46,7 @@ from search.indexer import DocumentIndexer
 
 from pydantic import BaseModel
 from rag.search_laws import search_laws
-from rag.answer import answer as rag_answer
+from rag.answer import answer as rag_answer, answer_stream as rag_answer_stream
 
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(title=API_TITLE, version=API_VERSION)
@@ -188,6 +188,15 @@ def laws_search(q: str = Query(..., min_length=1), k: int = 6):
 def chat(req: ChatRequest):
     """Chat juridique : réponse ancrée sur les articles récupérés + citations."""
     return rag_answer(req.question, k=req.k)
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    """Version streaming (NDJSON) : sources d'abord, puis les tokens de la réponse."""
+    return StreamingResponse(
+        rag_answer_stream(req.question, k=req.k),
+        media_type="application/x-ndjson",
+    )
 
 
 # ── Point d'entrée direct ─────────────────────────────────────────────────

@@ -12,15 +12,23 @@ if str(_ROOT) not in sys.path:
 from rag.embeddings import embed
 from rag import store
 
-COLLECTION = "laws_commercial"
+# Corpus juridiques interrogés (ajouter les nouveaux ici : laws_civil, ...).
+COLLECTIONS = ["laws_commercial", "laws_penal"]
 
 
-def search_laws(query: str, limit: int = 6) -> list[dict]:
+def search_laws(query: str, limit: int = 6, collections: list[str] | None = None) -> list[dict]:
     query = (query or "").strip()
-    if not query or not store.exists(COLLECTION):
+    if not query:
         return []
     qvec = embed(query)
-    return store.search(COLLECTION, qvec, limit=limit)
+    hits: list[dict] = []
+    for col in (collections or COLLECTIONS):
+        if store.exists(col):
+            for h in store.search(col, qvec, limit=limit):
+                h["collection"] = col
+                hits.append(h)
+    hits.sort(key=lambda h: h.get("score", 0), reverse=True)
+    return hits[:limit]
 
 
 if __name__ == "__main__":
