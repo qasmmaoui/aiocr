@@ -37,6 +37,7 @@ from rag import store
 LAWS_DIR      = os.environ.get("LAWS_DIR", "/workspace/laws/commercial")
 COLLECTION    = os.environ.get("LAWS_COLLECTION", "laws_commercial")
 DO_OCR        = os.environ.get("INGEST_OCR", "0") == "1"
+FORCE_OCR     = os.environ.get("FORCE_OCR", "0") == "1"   # OCR toutes les pages (couche texte cassée)
 DONE_FILE     = os.environ.get("LAWS_DONE_FILE", "/workspace/laws_ingest_done.json")
 CUR_FILE      = "/workspace/laws_ingest_current.txt"
 EMBED_BATCH   = 64
@@ -61,9 +62,10 @@ def extract_text(pdf_path: str) -> str:
         return ""
     for page in doc:
         raw = page.get_text()
-        if len(re.sub(r'\s+', '', raw)) > 50:
+        has_native = len(re.sub(r'\s+', '', raw)) > 50
+        if has_native and not FORCE_OCR:
             parts.append(light_clean(raw.strip()))
-        elif DO_OCR:
+        elif DO_OCR or FORCE_OCR:
             try:
                 pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
                 b64 = base64.b64encode(pix.tobytes("png")).decode()
@@ -124,10 +126,12 @@ def main() -> None:
 
         chunks = chunk_text(extract_text(pdf))
         if chunks:
-            vecs = _embed_file(chunks)
+            texts = [c["text"] for c in chunks]
+            vecs = _embed_file(texts)
             points = [
                 (str(uuid.uuid4()), vecs[i],
-                 {"text": chunks[i], "law": name, "file": base, "chunk": i})
+                 {"text": chunks[i]["text"], "law": name, "file": base,
+                  "chunk": i, "article": chunks[i].get("article")})
                 for i in range(len(chunks))
             ]
             for i in range(0, len(points), UPSERT_BATCH):

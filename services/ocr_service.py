@@ -9,6 +9,7 @@ Description :
 """
 
 import base64
+import os
 from typing import Callable
 
 from ollama import Client as OllamaClient
@@ -65,7 +66,7 @@ def ocr_ollama_vision(image_b64: str) -> str:
     """
     Utilise un modèle vision Ollama pour extraire le texte d'une image.
     """
-    model = get_vision_model()
+    model = os.environ.get("OCR_MODEL") or get_vision_model()
     prompt = (
         "أنت نظام OCR دقيق جداً. انسخ حرفياً كل النص العربي الظاهر في هذه الصورة "
         "كما هو تماماً، سطراً بسطر، من اليمين إلى اليسار. "
