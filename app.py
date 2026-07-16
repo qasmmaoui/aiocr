@@ -59,6 +59,7 @@ st.session_state.setdefault("sq", "")
 st.session_state.setdefault("docs", None)
 st.session_state.setdefault("stats", None)
 st.session_state.setdefault("chat", [])
+st.session_state.setdefault("chat_sid", None)   # session serveur (mémoire de conversation)
 
 # ── CSS ───────────────────────────────────────────────────────────────────
 st.markdown("""<style>
@@ -209,7 +210,29 @@ with tab_chat:
         if st.session_state.chat and st.button("🗑️ محادثة جديدة",
                                                use_container_width=True, key="newchat"):
             st.session_state.chat = []
+            st.session_state.chat_sid = None
             st.rerun()
+
+    # Reprise d'une discussion précédente (mémoire serveur)
+    with st.expander("📜 المحادثات السابقة", expanded=False):
+        _sess = (api("get", "/api/sessions") or {}).get("sessions", [])
+        _sess = [s for s in _sess if s.get("n_messages")]
+        if not _sess:
+            st.caption("لا توجد محادثات محفوظة بعد.")
+        else:
+            _lbl = {f"{s['title'][:60]}  ({s['n_messages']//2} سؤال)": s["id"] for s in _sess}
+            _pick = st.selectbox("اختر محادثة", list(_lbl.keys()),
+                                 label_visibility="collapsed", key="sess_pick")
+            if st.button("استئناف المحادثة", key="sess_load", use_container_width=True):
+                _sid = _lbl[_pick]
+                _msgs = (api("get", f"/api/sessions/{_sid}/messages") or {}).get("messages", [])
+                st.session_state.chat = [
+                    {"role": m["role"], "content": m["content"],
+                     "sources": m.get("sources") or []}
+                    for m in _msgs
+                ]
+                st.session_state.chat_sid = _sid
+                st.rerun()
 
     # Historique
     for m in st.session_state.chat:
@@ -245,6 +268,9 @@ with tab_chat:
 
     # Génération en streaming
     if pending:
+        # session serveur créée paresseusement au 1er message (mémoire multi-tours)
+        if not st.session_state.chat_sid:
+            st.session_state.chat_sid = (api("post", "/api/sessions") or {}).get("session_id")
         st.session_state.chat.append({"role": "user", "content": pending})
         with st.chat_message("user", avatar="🧑"):
             st.markdown(pending)
@@ -255,7 +281,9 @@ with tab_chat:
                 try:
                     r = requests.post(
                         f"{API_BASE_URL}/api/chat/stream",
-                        json={"question": pending}, stream=True, timeout=600,
+                        json={"question": pending,
+                              "session_id": st.session_state.chat_sid},
+                        stream=True, timeout=600,
                     )
                     for line in r.iter_lines():
                         if not line:

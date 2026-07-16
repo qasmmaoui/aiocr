@@ -47,6 +47,7 @@ from search.indexer import DocumentIndexer
 from pydantic import BaseModel
 from rag.search_laws import search_laws
 from rag.answer import answer as rag_answer, answer_stream as rag_answer_stream
+from rag import memory as chat_memory
 
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(title=API_TITLE, version=API_VERSION)
@@ -176,6 +177,7 @@ def export_text(doc_id: str):
 class ChatRequest(BaseModel):
     question: str
     k: int = 6
+    session_id: str | None = None      # mémoire de conversation (optionnelle)
 
 
 @app.get("/api/laws/search")
@@ -187,16 +189,42 @@ def laws_search(q: str = Query(..., min_length=1), k: int = 6):
 @app.post("/api/chat")
 def chat(req: ChatRequest):
     """Chat juridique : réponse ancrée sur les articles récupérés + citations."""
-    return rag_answer(req.question, k=req.k)
+    return rag_answer(req.question, k=req.k, session_id=req.session_id)
 
 
 @app.post("/api/chat/stream")
 def chat_stream(req: ChatRequest):
     """Version streaming (NDJSON) : sources d'abord, puis les tokens de la réponse."""
     return StreamingResponse(
-        rag_answer_stream(req.question, k=req.k),
+        rag_answer_stream(req.question, k=req.k, session_id=req.session_id),
         media_type="application/x-ndjson",
     )
+
+
+# ── Sessions de conversation (mémoire) ───────────────────────────────────
+@app.post("/api/sessions")
+def create_session():
+    chat_memory.init()
+    return {"session_id": chat_memory.create_session()}
+
+
+@app.get("/api/sessions")
+def list_sessions(limit: int = 30):
+    chat_memory.init()
+    return {"sessions": chat_memory.list_sessions(limit=limit)}
+
+
+@app.get("/api/sessions/{session_id}/messages")
+def session_messages(session_id: str):
+    chat_memory.init()
+    return {"session_id": session_id, "messages": chat_memory.get_messages(session_id)}
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str):
+    chat_memory.init()
+    chat_memory.delete_session(session_id)
+    return {"deleted": session_id}
 
 
 # ── Point d'entrée direct ─────────────────────────────────────────────────
