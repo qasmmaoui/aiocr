@@ -197,6 +197,15 @@ def _load_session(session_id: str | None) -> tuple[list[dict], str]:
         return [], ""
 
 
+def _clean_history(history: list[dict] | None) -> list[dict]:
+    """Historique fourni par le client (mode OpenAI, sans état) : filtre et borne."""
+    out = []
+    for m in history or []:
+        if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str):
+            out.append({"role": m["role"], "content": m["content"][:4000]})
+    return out[-memory.RECENT_TURNS:]
+
+
 def _build_messages(question: str, hits: list[dict],
                     history: list[dict], summary: str) -> list[dict]:
     msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -227,12 +236,19 @@ def _persist(session_id: str | None, question: str,
 # ══════════════════════════════════════════════════════════════════════════
 #  API publique
 # ══════════════════════════════════════════════════════════════════════════
-def answer(question: str, k: int = 6, session_id: str | None = None) -> dict:
+def answer(question: str, k: int = 6, session_id: str | None = None,
+           history: list[dict] | None = None) -> dict:
+    """`history` explicite (mode OpenAI, sans état) court-circuite la session
+    interne : pas de lecture ni de persistance mémoire."""
     question = (question or "").strip()
     if not question:
         return {"answer": "", "sources": []}
 
-    history, summary = _load_session(session_id)
+    if history is not None:
+        history, summary = _clean_history(history), ""
+        session_id = None                      # le client gère son propre historique
+    else:
+        history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
     hits = search_laws(search_q, limit=k)
     if not hits:
@@ -259,15 +275,21 @@ def answer(question: str, k: int = 6, session_id: str | None = None) -> dict:
     return {"answer": text, "sources": sources, "search_query": search_q}
 
 
-def answer_stream(question: str, k: int = 6, session_id: str | None = None):
-    """Générateur NDJSON : {"sources":[…]} puis {"delta":"…"}* puis {"done":true}."""
+def answer_stream(question: str, k: int = 6, session_id: str | None = None,
+                  history: list[dict] | None = None):
+    """Générateur NDJSON : {"sources":[…]} puis {"delta":"…"}* puis {"done":true}.
+    `history` explicite -> mode sans état (voir answer())."""
     question = (question or "").strip()
     if not question:
         yield json.dumps({"sources": []}) + "\n"
         yield json.dumps({"done": True}) + "\n"
         return
 
-    history, summary = _load_session(session_id)
+    if history is not None:
+        history, summary = _clean_history(history), ""
+        session_id = None
+    else:
+        history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
     hits = search_laws(search_q, limit=k)
     yield json.dumps({"sources": _sources(hits), "search_query": search_q},

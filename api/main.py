@@ -48,6 +48,7 @@ from pydantic import BaseModel
 from rag.search_laws import search_laws
 from rag.answer import answer as rag_answer, answer_stream as rag_answer_stream
 from rag import memory as chat_memory
+from api.openai_compat import router as v1_router
 
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(title=API_TITLE, version=API_VERSION)
@@ -59,6 +60,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API publique /v1 (clé API requise) : compatible OpenAI + native structurée
+app.include_router(v1_router)
+
+
+@app.on_event("startup")
+def _init_api_keys():
+    """Génère une clé API au premier démarrage si aucune n'existe
+    (affichée dans les logs ; fichier sur le volume réseau)."""
+    from api.auth import ensure_keys
+    ensure_keys()
 
 # ── Singleton indexeur ────────────────────────────────────────────────────
 _indexer: DocumentIndexer | None = None
