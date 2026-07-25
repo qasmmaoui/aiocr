@@ -7,9 +7,9 @@
 import openpyxl, fitz, re, glob, os, json, random, unicodedata, io
 from collections import Counter
 
-JDIR = r"C:\Users\HP\Downloads\juris\Chambre_6\Chambre_6"
+JDIR = r"Y:\adala-project\juris\Chambre_6\Chambre_6"
 XLSX = os.path.join(JDIR, "resultats_Chambre_6.xlsx")
-CAT  = r"C:\Users\HP\Downloads\adala_pdfs\_catalog\catalog.json"
+CAT  = r"Y:\adala-project\adala_pdfs\_catalog\catalog.json"
 OUT  = r"C:\Users\HP\AppData\Local\Temp\claude\C--Users-HP--claude\805beed1-2d72-4c8a-8626-15bbfe36c597\scratchpad\juris_link_report.txt"
 
 AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")

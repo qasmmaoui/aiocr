@@ -78,13 +78,26 @@ def _split_history(messages: list[OAIMessage]) -> tuple[str, list[dict]]:
 
 
 def _sources_block(sources: list[dict]) -> str:
-    """Bloc «📚 المصادر» ajouté au texte (rendu par tout client OpenAI)."""
+    """Bloc «📚 المصادر» ajouté au texte (rendu par tout client OpenAI).
+    Chaque source pointe vers la visionneuse (page PDF originale + texte OCR)."""
     if not sources:
         return ""
+    from urllib.parse import quote
+
+    from api.viewer import chunk_page
+    from core.config import VIEWER_BASE_URL
+
     lines = []
     for i, s in enumerate(sources, 1):
-        art = f"المادة/الفصل {s['article']} — " if s.get("article") else ""
-        lines.append(f"{i}. {art}{s.get('law', '')}")
+        art = f"المادة/الفصل {s['article']} — " if s.get("article") and str(s["article"]) != "None" else ""
+        entry = f"{i}. {art}{s.get('law', '')}"
+        if s.get("file") and s.get("chunk") is not None:
+            page = chunk_page(s["file"], s["chunk"])
+            url = (f"{VIEWER_BASE_URL}/api/viewer?file={quote(s['file'])}"
+                   f"&chunk={quote(str(s['chunk']))}")
+            pg = f" (ص. {page})" if page else ""
+            entry += f" — [🔎 التحقق من النص الأصلي{pg}]({url})"
+        lines.append(entry)
     return "\n\n---\n📚 **المصادر:**\n" + "\n".join(lines)
 
 

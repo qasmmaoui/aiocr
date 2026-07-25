@@ -23,7 +23,7 @@ Usage :  python catalog_pass1.py sample   (150 fichiers, contrôle qualité)
 import fitz, re, os, sys, json, glob, hashlib, random, unicodedata
 from collections import defaultdict
 
-ROOT = r"C:\Users\HP\Downloads\adala_pdfs"
+ROOT = r"Y:\adala-project\adala_pdfs"
 OUT  = os.path.join(ROOT, "_catalog")
 INDEX = os.path.join(ROOT, "_adala_index.json")
 

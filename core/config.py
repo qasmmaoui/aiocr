@@ -6,6 +6,7 @@
 """
 
 import multiprocessing
+import os
 from pathlib import Path
 
 
@@ -44,6 +45,9 @@ API_TITLE   = "Adala · API القانونية لوزارة العدل"
 API_VERSION = "1.0.0"
 API_HOST    = "0.0.0.0"
 API_PORT    = 8000
+# Base publique des liens «التحقق من النص الأصلي» dans les réponses
+# (surchargée par la variable d'environnement en production/pod).
+VIEWER_BASE_URL = os.environ.get("VIEWER_BASE_URL", "http://localhost:8000")
 
 # ── Streamlit ─────────────────────────────────────────────────────────────
 API_BASE_URL = "http://localhost:8000"   # URL que le frontend Streamlit appelle

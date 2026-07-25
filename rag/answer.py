@@ -52,10 +52,13 @@ SYSTEM_PROMPT = """أنت مساعد قانوني مغربي محترف، خبي
 ## حدود المسؤولية
 - أنت أداة بحث ومساعدة، لست بديلاً عن الاستشارة القانونية؛ عند الأسئلة المتعلقة بقضية معروضة فعلاً، ذكّر بإيجاز بضرورة الرجوع إلى النصوص الأصلية.
 - إذا ظهر من النصوص أن القانون عُدّل أو نُسخ (مثل عبارات «تم تغيير وتتميم» في الهوامش)، فنبّه إلى ذلك واذكر القانون المعدِّل إن ورد.
+- المقاطع قد تحمل ملاحظة نظامية بين قوسين عن حالة النص (محيَّن / نص لاحق يعدّله / منسوخ محتمل): التزم بما تطلبه تلك الملاحظة حرفياً في جوابك.
+- عند تعارض اجتهادات قضائية حول نفس المسألة: اعرض الموقفين معاً بتاريخيهما وغرفتيهما، وبيّن أيّهما الأحدث، وصرّح بأن الاجتهاد غير مستقر؛ لا ترجّح أحدهما من عندك.
 
 ## المحادثة
 - إذا وُجد ملخص أو رسائل سابقة، فاستعملها لفهم سياق السؤال (الضمائر، «وماذا عن...»)، لكن الأحكام دائماً من نصوص السياق الحالي.
-- أجب بالعربية الفصحى. إذا سُئلت بالفرنسية فأجب بالفرنسية مع إبقاء الاستشهادات بأسمائها العربية الرسمية."""
+- أجب بالعربية الفصحى. إذا سُئلت بالفرنسية فأجب بالفرنسية مع إبقاء الاستشهادات بأسمائها العربية الرسمية.
+- عند ترجمة مقتضى قانوني إلى الفرنسية: أورد النص العربي الأصلي حرفياً بين علامتي تنصيص متبوعاً بالترجمة، واستعمل المصطلحات القانونية المغربية الرسمية (dahir، procureur du Roi، mise en demeure...). الترجمة للفهم؛ والنص العربي وحده هو الحجة."""
 
 CONDENSE_PROMPT = (
     "أنت مساعد يعيد صياغة أسئلة المتابعة. حوّل سؤال المتابعة التالي إلى سؤال "
@@ -160,6 +163,47 @@ def _expand(hit: dict, back: int = 4) -> str:
     return body
 
 
+_VERSION_INDEX: dict | None = None
+_VERSION_CORPUS = r"Y:\adala-project\aiocr_data\laws_corpus_v2.jsonl"
+
+
+def _version_info(h: dict) -> dict | None:
+    """Statut versionnel du chunk (consolidé/à vérifier/abrogé), chargé
+    paresseusement depuis le corpus enrichi (jointure au service, en attendant
+    la ré-ingestion Qdrant avec les nouveaux champs)."""
+    global _VERSION_INDEX
+    if _VERSION_INDEX is None:
+        _VERSION_INDEX = {}
+        try:
+            with open(_VERSION_CORPUS, encoding="utf-8") as f:
+                for line in f:
+                    r = json.loads(line)
+                    if r.get("status", "current") != "current":
+                        _VERSION_INDEX[(r["file"], str(r["chunk"]))] = r
+        except OSError:
+            pass
+    return _VERSION_INDEX.get((h.get("file", ""), str(h.get("chunk", ""))))
+
+
+def _version_note(h: dict) -> str:
+    v = _version_info(h)
+    if not v:
+        return ""
+    st = v.get("status")
+    if st == "consolidated":
+        refs = "، ".join(v.get("amended_by", []))
+        note = f"\n(ملاحظة: هذا النص محيَّن — عُدِّل بمقتضى النص/النصوص رقم {refs}؛ اذكر ذلك عند الاستشهاد."
+        if v.get("amended_by_docs"):
+            note += " النص المعدِّل متوفر في المدونة ويمكن للمستعمل الاطلاع عليه عبر رابط التحقق."
+        return note + ")"
+    if st == "check_amendments":
+        refs = "، ".join(v.get("pending_amendments", []))
+        return f"\n(تنبيه: يوجد نص لاحق رقم {refs} يعدّل هذا القانون وقد لا يكون مدمجاً هنا — نبّه المستعمل.)"
+    if st == "possibly_abrogated":
+        return "\n(تحذير: ورد ما يفيد نسخ/إلغاء هذا النص — نبّه المستعمل وجوباً وتحقق من النص الناسخ.)"
+    return ""
+
+
 def _build_context(hits: list[dict]) -> str:
     parts = []
     for i, h in enumerate(hits):
@@ -167,6 +211,7 @@ def _build_context(hits: list[dict]) -> str:
         art_lbl = f" — رقم المادة/الفصل: {art}" if art else ""
         parts.append(
             f"[مقطع {i + 1}] المصدر: {h.get('law', '')}{art_lbl}\nالنص: {_expand(h)}"
+            + _version_note(h)
         )
     return "\n\n".join(parts)
 
@@ -177,6 +222,7 @@ def _sources(hits: list[dict]) -> list[dict]:
             "law": h.get("law", ""),
             "file": h.get("file", ""),
             "article": h.get("article"),
+            "chunk": h.get("chunk"),
             "score": round(float(h.get("score", 0)), 3),
             "excerpt": (h.get("text", "") or "")[:400],
         }
