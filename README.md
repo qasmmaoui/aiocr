@@ -1,355 +1,183 @@
-# ⚖️ Adala — البوابة القانونية لوزارة العدل
+# ⚖️ Adala — المساعد القانوني الذكي لوزارة العدل
 
-> **DMSI · Ing. Mouad** — Plateforme d'extraction et de recherche intelligente de documents juridiques arabes.
+> **DMSI · Ing. Mouad** — Assistant juridique marocain fondé sur l'IA : OCR arabe,
+> recherche sémantique (RAG) ancrée sur les textes officiels, citations vérifiables
+> page par page, et gestion versionnée du corpus législatif et jurisprudentiel.
 
----
-
-## 📐 Architecture
-
-```
-aiocr/
-│
-├── app.py                        # 🖥️  Frontend Streamlit  (UI)
-│
-├── api/
-│   ├── __init__.py
-│   └── main.py                   # 🚀  Backend FastAPI     (API REST)
-│
-├── core/
-│   ├── __init__.py
-│   ├── config.py                 # ⚙️  Configuration centrale (chemins, modèles…)
-│   └── utils.py                  # 🔧  Utilitaires (hash, logo, Ollama)
-│
-├── services/
-│   ├── __init__.py
-│   ├── correction_service.py     # ✍️  Correction OCR arabe (dict + regex)
-│   ├── ocr_service.py            # 📷  OCR : Tesseract → Ollama Vision (fallback)
-│   └── extraction_service.py    # 📄  Extraction PDF, cache JSON, classification
-│
-├── search/
-│   ├── __init__.py
-│   ├── engine.py                 # 🔍  Normalisation arabe, distance d'édition, highlight
-│   └── indexer.py                # 📑  Index inversé, correction requête, suggestions
-│
-├── data/
-│   ├── uploads/                  # PDFs téléversés
-│   ├── cache_corrections/        # Cache JSON par hash MD5
-│   └── search_index/             # index.json
-│
-├── assets/
-│   └── zz.png                    # Logo Adala
-│
-├── requirements.txt
-└── README.md
-```
-
-### Flux de données
-
-```
-Utilisateur (navigateur)
-       │  HTTP
-       ▼
- ┌─────────────┐   REST /api/*   ┌──────────────────┐
- │  Streamlit  │ ─────────────▶ │   FastAPI         │
- │  app.py     │ ◀───────────── │   api/main.py     │
- └─────────────┘    JSON        └──────┬───────────┘
-                                       │
-                     ┌─────────────────┼──────────────────┐
-                     ▼                 ▼                    ▼
-              extraction_service  ocr_service         indexer.py
-              (PyMuPDF)           (Tesseract/Ollama)  (index JSON)
-                     │                 │
-                     └────── correction_service ──────────┘
-```
+**Principe directeur : la confiance se prouve.** Chaque réponse cite ses sources ;
+chaque source s'ouvre sur la page originale du Bulletin/portail Adala avec le
+passage surligné. Le LLM n'est jamais cru sur parole.
 
 ---
 
-## 🛠️ Prérequis
+## 🧱 Vue d'ensemble
 
-| Outil | Version minimale | Rôle |
-|-------|-----------------|------|
-| Python | 3.11+ | Runtime |
-| Tesseract OCR | 5.x | OCR arabe/français |
-| Ollama | 0.3+ | Modèle vision (fallback OCR) |
-| Git | 2.x | Versioning |
+```
+                     ┌────────────────────────────────────────────────┐
+   Open WebUI /      │  FastAPI (api/)                                │
+   tout client  ───▶ │   /v1/chat/completions   OpenAI-compatible     │
+   OpenAI            │   /v1/chat               natif (sources JSON)  │
+                     │   /api/viewer            preuve page/OCR       │
+                     │   /api/admin             console du corpus     │
+                     └──────┬──────────────────────┬──────────────────┘
+                            │ retrieval            │ génération
+                            ▼                      ▼
+                     Qdrant (bge-m3)         Ollama (LLM)
+                     collections laws_*      prompt ancré + règles
+                            ▲                      métier (versions,
+                            │ ingestion            jurisprudence, FR)
+                     pipeline/ (voir plus bas)
+```
+
+### Les trois collections de données
+
+| Collection | Contenu | Volume |
+|---|---|---|
+| `laws` | Textes consolidés (نصوص محينة) — base des réponses | 585 PDF → 13 098 chunks |
+| `adala_pdfs` | Scrape complet du portail adala.justice.gov.ma | ~4 456 PDF |
+| `juris` | Arrêts de la Cour de cassation (Chambre 6 + métadonnées Excel) | ~6 858 PDF |
 
 ---
 
-## 🚀 Installation — Étape par étape
+## 🔎 Vérifiabilité — la visionneuse de preuves
 
-### 1. Cloner le dépôt
+`GET /api/viewer?file=<pdf>&chunk=<n>` — page RTL côte à côte :
+
+- **Image de la page originale** (rendu PyMuPDF) avec le **passage cité surligné
+  en jaune** (localisation par recherche dans la couche texte)
+- **Texte OCR** effectivement utilisé par le modèle, en regard
+- Navigation page précédente/suivante, **suppression du filigrane à l'affichage**
+  (`clean=1` — les PDF originaux ne sont jamais modifiés)
+- **Badges de version** : 📌 نص محيَّن (+ lien «عرض النص المعدِّل» si l'acte
+  modificatif est dans le corpus) · ⚠ تحقق من التعديلات · 🛑 منسوخ محتمل
+- `GET /api/viewer/samples` — échantillon aléatoire cliquable : sert d'outil
+  d'audit qualité OCR
+
+Chaque réponse du chat ajoute automatiquement des liens
+«🔎 التحقق من النص الأصلي (ص. N)» vers cette visionneuse
+(base configurable via `VIEWER_BASE_URL`).
+
+---
+
+## 🗂 Gestion du corpus
+
+### Console d'administration (lecture seule)
+
+- `GET /api/admin` — tableau de bord : volumes par collection, chunks, statuts
+  de version, backlog OCR, doublons, dernière ingestion
+- `GET /api/admin/docs` — inventaire filtrable (nom, numéro officiel, collection,
+  statut) avec étiquettes d'état par document
+- `GET /api/admin/doc?file=…` — fiche document : métadonnées + liste des chunks
+  (page, statut, extrait) reliés à la visionneuse
+- `GET /api/admin/refresh` — recharge les caches après régénération des données
+
+### Guichet d'ingestion (`pipeline/ingest.py`)
 
 ```bash
-git clone https://github.com/<votre-org>/aiocr.git
-cd aiocr
+python pipeline/ingest.py init          # registre des 3 collections (sha1,
+                                        # empreinte texte, numéros officiels)
+python pipeline/ingest.py add [dossier] # traite la boîte d'entrée (défaut: inbox/)
 ```
 
-### 2. Créer un environnement virtuel
+Verdicts par fichier : **doublon octets** (rejeté) · **doublon contenu** —
+même texte sous un autre nom/date (rejeté) · **version potentielle** — même
+numéro officiel (accepté + signalé pour arbitrage) · **nouveau** (accepté ;
+les scans partent au backlog OCR). Rapport JSON à chaque passage.
+
+### Versionnement des textes (`pipeline/version_graph.py`)
+
+- Extraction des notes de consolidation («تم تغيير وتتميم المادة … بمقتضى …
+  رقم …») → graphe article par article (`version_graph.json`)
+- Détection des abrogations et des actes modificatifs
+- Corpus enrichi `laws_corpus_v2.jsonl` : chaque chunk porte
+  `status` / `amended_by` / `page`
+- Ces statuts sont **injectés dans le contexte du LLM** (rag/answer.py), qui a
+  pour instruction de les restituer ; en cas de jurisprudences contradictoires,
+  le prompt impose de présenter les deux positions datées **sans trancher**
+
+---
+
+## ⚙️ Pipeline de données (`pipeline/`)
+
+| Script | Rôle |
+|---|---|
+| `poc_ocr.py` | OCR GPU des PDF scannés (Nanonets-OCR, pod RunPod) |
+| `rechunk_core.py` / `export_corpus.py` | Découpage article-aware → corpus JSONL |
+| `page_map.py` | Rattachement chunk → page PDF (94 % exact via couche texte) |
+| `version_graph.py` | Dédoublonnage + graphe d'amendements + corpus v2 |
+| `ingest.py` | Registre + boîte d'entrée avec dédoublonnage |
+| `juris_extract.py` | Extraction texte des arrêts (couche texte) + backlog OCR |
+| `adala_alias_index.py` | Index numéro officiel → fichiers (bloc-titre, contenu) |
+| `catalog_pass1.py` / `juris_link_analysis.py` | Catalogage du scrape + analyse des liens قاعدة |
+
+---
+
+## 🚀 Démarrage
+
+### Prérequis
+
+| Outil | Rôle |
+|---|---|
+| Python 3.11+ | Runtime (PyMuPDF, FastAPI, numpy…) |
+| Qdrant | Vector store (collections `laws_*`, embeddings bge-m3 1024d) |
+| Ollama | Embeddings `bge-m3` + LLM de génération |
+| GPU (pod RunPod ou local) | OCR Nanonets + LLM 32B (la génération de qualité) |
 
 ```bash
-# Windows
-python -m venv .venv
-.venv\Scripts\activate
-
-# Linux / macOS
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 3. Installer les dépendances Python
-
-```bash
-pip install --upgrade pip
 pip install -r requirements.txt
+
+# Backend API (port 8000)
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# Interface conseillée : Open WebUI branché en OpenAI-compatible
+#   base_url = http://localhost:8000/v1   +   clé API (générée au 1er démarrage,
+#   voir logs / fichier api_keys)
 ```
 
-### 4. Installer Tesseract OCR
+Chemins des données : `core/config.py` et en-têtes des scripts `pipeline/*`
+(déploiement local actuel : `Y:\adala-project\` ; pod : `/workspace`).
 
-**Windows :**
-```
-https://github.com/UB-Mannheim/tesseract/wiki
-→ Télécharger tesseract-ocr-w64-setup-5.x.exe
-→ Cocher les langues : Arabic, French
-→ Chemin par défaut : C:\Program Files\Tesseract-OCR\tesseract.exe
-```
-
-**Ubuntu / Debian :**
-```bash
-sudo apt-get install -y tesseract-ocr tesseract-ocr-ara tesseract-ocr-fra
-```
-
-**macOS :**
-```bash
-brew install tesseract tesseract-lang
-```
-
-### 5. Installer et démarrer Ollama (optionnel — fallback vision)
-
-```bash
-# Installation
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Télécharger le modèle vision recommandé
-ollama pull qwen2.5vl:3b
-```
-
-> ℹ️ Sans Ollama, seul Tesseract est utilisé. Les pages « scan » sans Tesseract ne seront pas extraites.
-
-### 6. (Optionnel) Ajouter votre logo
-
-```bash
-cp votre_logo.png assets/zz.png
-```
-
----
-
-## ▶️ Démarrage du projet
-
-### Terminal 1 — Backend FastAPI
-
-```bash
-# Depuis la racine du projet
-uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-✅ API disponible sur : `http://localhost:8000`  
-📖 Documentation Swagger : `http://localhost:8000/docs`  
-📖 Documentation Redoc : `http://localhost:8000/redoc`
-
-### Terminal 2 — Frontend Streamlit
-
-```bash
-streamlit run app.py
-```
-
-✅ Interface disponible sur : `http://localhost:8501`
-
----
-
-## 📡 Endpoints de l'API
+### Endpoints principaux
 
 | Méthode | Endpoint | Description |
-|---------|----------|-------------|
-| `GET` | `/api/health` | Vérification de l'état du service |
-| `GET` | `/api/stats` | Statistiques de l'index |
-| `GET` | `/api/documents` | Liste des documents indexés |
-| `POST` | `/api/upload` | Upload + extraction + indexation d'un PDF |
-| `DELETE` | `/api/documents/{id}` | Suppression d'un document |
-| `GET` | `/api/search?q=…` | Recherche full-text en arabe |
-| `GET` | `/api/pdf/{filename}` | Téléchargement du PDF original |
-| `GET` | `/api/documents/{id}/text` | Export du texte brut d'un document |
-
-### Exemple — Upload via curl
-
-```bash
-curl -X POST http://localhost:8000/api/upload \
-  -F "file=@mon_document.pdf"
-```
-
-### Exemple — Recherche via curl
-
-```bash
-curl "http://localhost:8000/api/search?q=الظهير+الشريف"
-```
-
-### Exemple — Intégration Python
-
-```python
-import requests
-
-# Upload
-with open("doc.pdf", "rb") as f:
-    r = requests.post("http://localhost:8000/api/upload", files={"file": f})
-    print(r.json())
-
-# Recherche
-r = requests.get("http://localhost:8000/api/search", params={"q": "الدستور"})
-for result in r.json()["results"]:
-    print(result["filename"], "—", len(result["matches"]), "correspondances")
-```
+|---|---|---|
+| `POST` | `/v1/chat/completions` | Chat OpenAI-compatible (clé API requise) |
+| `GET` | `/v1/models` | Découverte du modèle `adala-legal` |
+| `POST` | `/v1/chat` | Chat natif : `sources` structurées + sessions |
+| `GET` | `/api/viewer` | Visionneuse de preuves |
+| `GET` | `/api/admin` | Console d'administration |
+| `POST` | `/api/upload`, `GET /api/search` | OCR + recherche plein-texte (app historique) |
 
 ---
 
-## ⚙️ Configuration
+## 🧭 Règles métier du prompt (rag/answer.py)
 
-Toute la configuration est centralisée dans `core/config.py` :
-
-```python
-# Changer le port de l'API
-API_PORT = 8000
-
-# Changer l'URL que Streamlit utilise pour appeler FastAPI
-API_BASE_URL = "http://localhost:8000"
-
-# Changer le modèle Ollama préféré
-PREFERRED_MODELS = ["qwen2.5vl:7b", "qwen2.5vl:3b"]
-```
-
----
-
-## 🗂️ Structure des données
-
-### Cache (data/cache_corrections/{hash}.json)
-
-```json
-{
-  "pages": [
-    {"num": 1, "type": "native", "text": "..."},
-    {"num": 2, "type": "scan",   "text": "..."}
-  ],
-  "doc_type": "mixed",
-  "nb_pages": 10,
-  "n_native": 7,
-  "n_scan": 3
-}
-```
-
-### Index de recherche (data/search_index/index.json)
-
-```json
-{
-  "v": {
-    "القضاء": { "f": {"القضاء": 42}, "n": 42 }
-  },
-  "d": {
-    "<md5_hash>": {
-      "fn": "ظهير_شريف.pdf",
-      "np": 15,
-      "dt": "2025-01-15T10:30:00",
-      "p":  {"1": "نص الصفحة الأولى..."},
-      "pn": {"1": "نص منقح..."}
-    }
-  }
-}
-```
-
----
-
-## 🧪 Tester l'installation
-
-```bash
-# Vérifier que l'API répond
-curl http://localhost:8000/api/health
-# {"status":"ok","version":"1.0.0"}
-
-# Vérifier les stats
-curl http://localhost:8000/api/stats
-# {"docs":0,"words":0,"pages":0}
-```
-
----
-
-## 🔒 Déploiement en production
-
-### Variables d'environnement recommandées
-
-```bash
-export ADALA_API_HOST=0.0.0.0
-export ADALA_API_PORT=8000
-export ADALA_STREAMLIT_PORT=8501
-```
-
-### Avec Docker Compose (recommandé)
-
-```yaml
-# docker-compose.yml (à créer)
-version: '3.9'
-services:
-  api:
-    build: .
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
-    ports: ["8000:8000"]
-    volumes: ["./data:/app/data", "./assets:/app/assets"]
-
-  frontend:
-    build: .
-    command: streamlit run app.py --server.port 8501
-    ports: ["8501:8501"]
-    depends_on: [api]
-    environment:
-      - API_BASE_URL=http://api:8000
-```
-
-### Sécuriser l'API en production
-
-Dans `api/main.py`, remplacer :
-```python
-allow_origins=["*"]
-```
-par :
-```python
-allow_origins=["http://votre-domaine.ma"]
-```
-
----
-
-## 👥 Contribution
-
-```bash
-# Créer une branche feature
-git checkout -b feature/nom-de-la-fonctionnalite
-
-# Committer
-git add .
-git commit -m "feat: description de la modification"
-
-# Pousser
-git push origin feature/nom-de-la-fonctionnalite
-```
+1. Réponses **exclusivement** fondées sur les extraits fournis ; refus explicite
+   sinon (« لم أعثر على نص قانوني مطبّق… ») — jamais d'article inventé
+2. Citation systématique : numéro d'article + nom du texte
+3. Statuts de version restitués (نص محيَّن / تحقق من التعديلات / منسوخ محتمل)
+4. Jurisprudences contradictoires : les deux positions, datées, sans arbitrage
+5. Question en français → réponse en français, citations en arabe officiel ;
+   toute traduction accompagne le **texte arabe original**, seul faisant foi
 
 ---
 
 ## 📋 Feuille de route
 
-- [ ] Pagination des résultats de recherche
-- [ ] Analyse sémantique avec embeddings arabes
-- [ ] Export PDF annoté
-- [ ] Interface d'administration des documents
-- [ ] Tests unitaires (pytest)
+- [ ] OCR du backlog jurisprudence (5 141 arrêts scannés) — pod GPU
+- [ ] Indexation Qdrant des arrêts extraits (1 707 disponibles) + clustering
+      des questions juridiques pour détecter les divergences d'اجتهاد
+- [ ] Scrape ciblé des actes modificatifs manquants (~36 numéros cités par les
+      notes de consolidation, liste dans `version_graph.json`)
+- [ ] Ré-ingestion Qdrant avec les champs de version (jointure au service
+      aujourd'hui) ; corpus français officiel (BO) pour les réponses FR
+- [ ] Jeu de test « golden » (50–100 Q/R validées) + évaluation de régression
+- [ ] Authentification de la console d'administration avant tout déploiement
+      hors localhost ; actions d'administration (exclusion, ré-indexation)
 
 ---
 
 ## 📄 Licence
 
-© 2025 وزارة العدل — المملكة المغربية · DMSI . Ing. Mouad Boukhari
+© 2025-2026 وزارة العدل — المملكة المغربية · DMSI · Ing. Mouad Boukhari
 Usage interne uniquement.
