@@ -53,6 +53,7 @@ from api.viewer import router as viewer_router
 from api.admin import router as admin_router
 from api.feedback import router as feedback_router
 from api.pipeline import router as pipeline_router
+from api.chat_ui import router as chat_ui_router
 
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(title=API_TITLE, version=API_VERSION)
@@ -75,6 +76,8 @@ app.include_router(admin_router)
 app.include_router(feedback_router)
 # Opérations : lancement des jobs du pipeline depuis la console
 app.include_router(pipeline_router)
+# Front de chat autonome (pilote) : /chat
+app.include_router(chat_ui_router)
 
 
 @app.on_event("startup")

@@ -152,6 +152,17 @@ def main() -> None:
     adala_idx_path = r"Y:\adala-project\aiocr_data\adala_alias_index.json"
     if os.path.exists(adala_idx_path):
         adala_idx = json.load(open(adala_idx_path, encoding="utf-8"))
+    # chaînes du catalogue récupéré (law_num -> fichiers adala) : 2e source d'alias
+    chains_path = r"Y:\adala-project\adala_pdfs\_catalog\version_chains.json"
+    if os.path.exists(chains_path):
+        try:
+            chains = json.load(open(chains_path, encoding="utf-8")).get("chains", {})
+            for key, paths in chains.items():
+                num = canon_num(key.split(":", 1)[-1])
+                if num:
+                    adala_idx.setdefault(num, []).extend(paths)
+        except Exception:
+            pass
 
     def resolve(ref: str, self_doc: str) -> list[dict]:
         """Numéro cité -> documents (corpus laws d'abord, sinon adala_pdfs)."""

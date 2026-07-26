@@ -302,6 +302,20 @@ def _persist(session_id: str | None, question: str,
         pass  # la mémoire ne doit jamais casser la réponse
 
 
+_STACK_DOWN_MSG = ("محرك الإجابة غير مشغَّل حالياً (خدمات الاسترجاع والتوليد "
+                   "متوقفة). أخبر المشرف بتشغيل الخدمات ثم أعد المحاولة.")
+
+
+def _stack_ready() -> bool:
+    """Échec rapide quand Ollama/Qdrant sont éteints — plutôt que des minutes
+    de retries avant le premier octet."""
+    try:
+        requests.get(OLLAMA_BASE_URL, timeout=2)
+        return True
+    except Exception:
+        return False
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  Garde-fou citations : tout passage entre guillemets doit exister
 #  littéralement dans les passages servis — sinon avertissement mécanique.
@@ -357,6 +371,8 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     question = (question or "").strip()
     if not question:
         return {"answer": "", "sources": []}
+    if not _stack_ready():
+        return {"answer": _STACK_DOWN_MSG, "sources": [], "search_query": question}
 
     if history is not None:
         history, summary = _clean_history(history), ""
@@ -397,6 +413,11 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     question = (question or "").strip()
     if not question:
         yield json.dumps({"sources": []}) + "\n"
+        yield json.dumps({"done": True}) + "\n"
+        return
+    if not _stack_ready():
+        yield json.dumps({"sources": []}) + "\n"
+        yield json.dumps({"delta": _STACK_DOWN_MSG}, ensure_ascii=False) + "\n"
         yield json.dumps({"done": True}) + "\n"
         return
 
