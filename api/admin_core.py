@@ -202,7 +202,8 @@ CSS = """
 
 NAV = [("", "اللوحة"), ("/docs", "الوثائق"), ("/juris", "الاجتهاد القضائي"),
        ("/review", "المراجعة والمصادقة"), ("/annotations", "الملاحظات المعتمدة"),
-       ("/quality", "جودة الاستخراج"), ("/users", "المستعملون"), ("/audit", "السجل")]
+       ("/quality", "جودة الاستخراج"), ("/pipeline", "التشغيل"),
+       ("/users", "المستعملون"), ("/audit", "السجل")]
 
 
 def page(title: str, body: str, user: dict | None = None, active: str = "") -> str:

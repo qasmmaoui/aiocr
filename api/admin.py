@@ -126,6 +126,7 @@ def login_page(err: str = ""):
 def login(username: str = Form(...), password: str = Form(...)):
     core.init_db()
     username = username.strip()
+    password = password.strip()        # espace parasite du copier-coller
     with core.conn() as c:
         r = c.execute("SELECT username, pw, active FROM users "
                       "WHERE username=? COLLATE NOCASE", (username,)).fetchone()
