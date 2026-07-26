@@ -12,7 +12,7 @@ import os
 
 import fitz
 
-JURIS_DIR = r"Y:\adala-project\juris"
+JURIS_DIR = r"Z:\jurisprudence"     # collection canonique (20k+ arrêts)
 TEXTS_OUT = r"Y:\adala-project\aiocr_data\juris_texts.jsonl"
 BACKLOG_OUT = r"Y:\adala-project\aiocr_data\juris_ocr_backlog.txt"
 MIN_CHARS_PER_PAGE = 150
