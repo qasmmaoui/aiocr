@@ -125,9 +125,12 @@ def login_page(err: str = ""):
 @router.post("/login")
 def login(username: str = Form(...), password: str = Form(...)):
     core.init_db()
+    username = username.strip()
     with core.conn() as c:
-        r = c.execute("SELECT pw, active FROM users WHERE username=?",
-                      (username,)).fetchone()
+        r = c.execute("SELECT username, pw, active FROM users "
+                      "WHERE username=? COLLATE NOCASE", (username,)).fetchone()
+    if r:
+        username = r["username"]          # casse canonique du compte
     if not r or not r["active"] or not core.verify_pw(password, r["pw"]):
         core.log_action(username, "login_failed")
         return RedirectResponse("/api/admin/login?err=1", status_code=303)
