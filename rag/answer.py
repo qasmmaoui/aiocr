@@ -303,6 +303,51 @@ def _persist(session_id: str | None, question: str,
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  Garde-fou citations : tout passage entre guillemets doit exister
+#  littéralement dans les passages servis — sinon avertissement mécanique.
+# ══════════════════════════════════════════════════════════════════════════
+_QUOTE_RE = re.compile(r"[«\"“]([^«»\"“”]{15,300})[»\"”]")
+_DIAC = re.compile(r"[ً-ٰٟـ]")
+
+
+def _qnorm(s: str) -> str:
+    s = _DIAC.sub("", s or "")
+    s = (s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+           .replace("ى", "ي").replace("ة", "ه"))
+    return re.sub(r"[^؀-ۿ0-9]", "", s)
+
+
+def _quote_warning(text: str, hits: list[dict]) -> str:
+    """Chaîne d'avertissement à ajouter à la réponse ('' si tout est vérifié)."""
+    try:
+        corpus = _qnorm(" ".join(h.get("text", "") or "" for h in hits))
+        missing = []
+        for m in _QUOTE_RE.finditer(text or ""):
+            q = _qnorm(m.group(1))
+            if len(q) >= 12 and q not in corpus:
+                missing.append(m.group(1))
+        if not missing:
+            return ""
+        # visible dans la file de revue de la console (boucle expert)
+        try:
+            from api.admin_core import conn, init_db
+            init_db()
+            with conn() as c:
+                c.execute("INSERT INTO feedback(ts,user,type,question,answer,comment) "
+                          "VALUES(?,?,?,?,?,?)",
+                          (time.time(), "garde-citations", "quote_mismatch", "",
+                           (text or "")[:1500],
+                           " | ".join(q[:80] for q in missing[:3])))
+        except Exception:
+            pass
+        return ("\n\n⚠️ تنبيه آلي: "
+                f"{len(missing)} اقتباس(ات) في هذا الجواب لم يُعثر عليها حرفياً في "
+                "النصوص المسترجَعة — تحقق من روابط المصادر قبل الاعتماد عليها.")
+    except Exception:
+        return ""
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  API publique
 # ══════════════════════════════════════════════════════════════════════════
 def answer(question: str, k: int = 6, session_id: str | None = None,
@@ -339,6 +384,7 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     except Exception as e:  # noqa: BLE001
         text = f"تعذّر توليد الإجابة (نموذج الاستدلال غير جاهز؟): {e}"
 
+    text += _quote_warning(text, hits)
     sources = _sources(hits)
     _persist(session_id, question, text, sources)
     return {"answer": text, "sources": sources, "search_query": search_q}
@@ -399,5 +445,9 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     except Exception as e:  # noqa: BLE001
         yield json.dumps({"delta": f"\n\n[تعذّر التوليد: {e}]"}, ensure_ascii=False) + "\n"
 
+    warn = _quote_warning("".join(full), hits)
+    if warn:
+        full.append(warn)
+        yield json.dumps({"delta": warn}, ensure_ascii=False) + "\n"
     _persist(session_id, question, "".join(full), _sources(hits))
     yield json.dumps({"done": True}) + "\n"
