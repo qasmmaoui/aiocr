@@ -51,6 +51,7 @@ from rag import memory as chat_memory
 from api.openai_compat import router as v1_router
 from api.viewer import router as viewer_router
 from api.admin import router as admin_router
+from api.feedback import router as feedback_router
 
 # ── App ───────────────────────────────────────────────────────────────────
 app = FastAPI(title=API_TITLE, version=API_VERSION)
@@ -69,6 +70,8 @@ app.include_router(v1_router)
 app.include_router(viewer_router)
 # Console d'administration du corpus (lecture seule)
 app.include_router(admin_router)
+# Boucle expert : retours, corrections, annotations + file de revue
+app.include_router(feedback_router)
 
 
 @app.on_event("startup")
@@ -77,6 +80,9 @@ def _init_api_keys():
     (affichée dans les logs ; fichier sur le volume réseau)."""
     from api.auth import ensure_keys
     ensure_keys()
+    # Base de la console (comptes, revue, audit) + compte admin initial
+    from api.admin_core import init_db
+    init_db()
 
 # ── Singleton indexeur ────────────────────────────────────────────────────
 _indexer: DocumentIndexer | None = None

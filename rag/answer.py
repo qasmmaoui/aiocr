@@ -212,6 +212,21 @@ def _version_note(h: dict) -> str:
     return ""
 
 
+def _expert_note(h: dict) -> str:
+    """Annotations d'experts validées, jointes par fichier (boucle expert)."""
+    try:
+        from api.feedback import annotations_for
+        anns = annotations_for(h.get("file", ""))
+    except Exception:
+        return ""
+    parts = []
+    for a in anns:
+        art = f" (المادة {a['article']})" if a.get("article") else ""
+        parts.append(f"\n(ملاحظة خبير معتمدة — {a.get('author_role', 'خبير')}{art}: "
+                     f"{a['text']} — اذكرها إن كانت وثيقة الصلة بالسؤال.)")
+    return "".join(parts)
+
+
 def _build_context(hits: list[dict]) -> str:
     parts = []
     for i, h in enumerate(hits):
@@ -219,7 +234,7 @@ def _build_context(hits: list[dict]) -> str:
         art_lbl = f" — رقم المادة/الفصل: {art}" if art else ""
         parts.append(
             f"[مقطع {i + 1}] المصدر: {h.get('law', '')}{art_lbl}\nالنص: {_expand(h)}"
-            + _version_note(h)
+            + _version_note(h) + _expert_note(h)
         )
     return "\n\n".join(parts)
 
