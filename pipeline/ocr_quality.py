@@ -23,6 +23,9 @@ AR = re.compile(r"[؀-ۿ]")
 AR_WORD = re.compile(r"[؀-ۿ]{2,}")
 DOTS = re.compile(r"[.…]{4,}|[-_]{4,}")
 LONE = re.compile(r"(?:\s[؀-ۿ]\s){3,}")
+# artefact de ligature lam-alef de la couche texte PDF : «أعاله», «األولى»,
+# «امللف»… — signature d'un document à re-OCRiser sur le pod
+LIGATURE_BUG = re.compile(r"(?<![؀-ۿ])[وفبلك]?ا[أإآبتثجحخدذرزسشصضطظعغفقمنهي]ل[؀-ۿ]")
 
 
 def score(text: str) -> float:
@@ -41,14 +44,33 @@ def score(text: str) -> float:
 
 
 def main() -> None:
+    from collections import defaultdict
     scores, rows = {}, []
+    lig_by_file = defaultdict(int)
+    words_by_file = defaultdict(int)
     with open(CORPUS, encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
-            s = score(r.get("text", ""))
+            t = r.get("text", "")
+            s = score(t)
             scores[f"{r['file']}#{r['chunk']}"] = s
             rows.append((s, r))
+            lig_by_file[r["file"]] += len(LIGATURE_BUG.findall(t))
+            words_by_file[r["file"]] += len(AR_WORD.findall(t))
     json.dump(scores, open(OUT_J, "w", encoding="utf-8"), ensure_ascii=False)
+
+    # documents dont la couche texte est malade -> file d'attente re-OCR (pod)
+    reocr = sorted(
+        (f for f in lig_by_file
+         if words_by_file[f] > 200
+         and lig_by_file[f] / words_by_file[f] > 0.02),
+        key=lambda f: -lig_by_file[f] / max(1, words_by_file[f]))
+    reocr_path = OUT_J.replace("ocr_quality.json", "laws_reocr_backlog.txt")
+    with open(reocr_path, "w", encoding="utf-8") as f:
+        for name in reocr:
+            f.write(f"{name}\t{lig_by_file[name]}/{words_by_file[name]}\n")
+    print(f"couche texte malade (artefacts lam-alef >2% des mots): "
+          f"{len(reocr)} documents -> {reocr_path}")
 
     rows.sort(key=lambda x: x[0])
     with open(OUT_C, "w", newline="", encoding="utf-8-sig") as f:
