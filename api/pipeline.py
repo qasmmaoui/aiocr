@@ -194,18 +194,39 @@ def pipeline_page(user: dict = Depends(require("viewer")), log: int = Query(0)):
         f"<td></td><td><span class='tag t-gray'>🔌 البود مطفأ</span></td></tr>"
         for lbl, d in POD_JOBS)
 
+    def _progress(r):
+        """Pour un job en cours : dernier marqueur d'étape du journal."""
+        if r["status"] != "running" or not r["log_path"]:
+            return ""
+        try:
+            with open(r["log_path"], "rb") as f:
+                f.seek(max(0, os.path.getsize(r["log_path"]) - 4000))
+                tail = f.read().decode("utf-8", "replace")
+            import re as _re
+            steps = _re.findall(r"\[(\d+)/(\d+)\]\s*([^\n…]+)", tail)
+            if steps:
+                n, tot, lbl = steps[-1]
+                return f" — خطوة {n}/{tot}: {html.escape(lbl.strip())}"
+            lines = [l.strip() for l in tail.splitlines() if l.strip()]
+            return (" — " + html.escape(lines[-1][:60])) if lines else ""
+        except OSError:
+            return ""
+
     hist_rows = "".join(
         f"<tr><td>{r['id']}</td><td>{JOBS.get(r['name'], {}).get('label', r['name'])}</td>"
         f"<td><span class='tag "
         f"{'t-warn' if r['status'] == 'running' else 't-ok' if r['status'] == 'done' else 't-danger'}'>"
-        f"{r['status']}</span></td>"
+        f"{r['status']}</span>{_progress(r)}</td>"
         f"<td class='num'>{dt.datetime.fromtimestamp(r['started']).strftime('%m-%d %H:%M')}</td>"
         f"<td class='num'>{(str(int((r['ended'] or time.time()) - r['started'])) + ' ث')}</td>"
         f"<td>{html.escape(r['launched_by'] or '')}</td>"
         f"<td><a href='?log={r['id']}'>الجرد</a></td></tr>"
         for r in hist)
 
-    log_panel = ""
+    # la page se rafraîchit d'elle-même tant qu'un job tourne
+    auto_page = "<meta http-equiv='refresh' content='6'>" if running and not log else ""
+
+    log_panel = auto_page
     if log:
         with core.conn() as c:
             r = c.execute("SELECT * FROM jobs WHERE id=?", (log,)).fetchone()
