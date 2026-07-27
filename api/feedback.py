@@ -10,7 +10,7 @@ import html
 import json
 import time
 
-from fastapi import APIRouter, Depends, Form, Query
+from fastapi import APIRouter, Depends, Form, Header, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -42,8 +42,15 @@ class CorrectionIn(BaseModel):
 
 
 @router.post("/feedback")
-def add_feedback(fb: FeedbackIn):
+def add_feedback(fb: FeedbackIn, authorization: str | None = Header(default=None)):
     core.init_db()
+    try:
+        from api.mobile_auth import bearer_user
+        u = bearer_user(authorization)
+        if u:
+            fb.user = u["username"]        # identité JWT prioritaire sur le champ libre
+    except Exception:
+        pass
     with core.conn() as c:
         cur = c.execute(
             "INSERT INTO feedback(ts,user,type,question,answer,sources_json,comment) "

@@ -26,7 +26,7 @@ if str(_ROOT) not in sys.path:
 
 import base64 as _b64
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -78,6 +78,9 @@ app.include_router(feedback_router)
 app.include_router(pipeline_router)
 # Front de chat autonome (pilote) : /chat
 app.include_router(chat_ui_router)
+# Auth mobile (JWT) + quotas
+from api.mobile_auth import router as mobile_auth_router  # noqa: E402
+app.include_router(mobile_auth_router)
 
 
 @app.on_event("startup")
@@ -223,8 +226,14 @@ def chat(req: ChatRequest):
 
 
 @app.post("/api/chat/stream")
-def chat_stream(req: ChatRequest):
-    """Version streaming (NDJSON) : sources d'abord, puis les tokens de la réponse."""
+def chat_stream(req: ChatRequest, authorization: str | None = Header(default=None)):
+    """Version streaming (NDJSON) : sources d'abord, puis les tokens de la réponse.
+    Avec un Bearer mobile : quota vérifié et question décomptée."""
+    from api.mobile_auth import bearer_user, check_quota, count_question
+    u = bearer_user(authorization)
+    if u:
+        check_quota(u["username"])
+        count_question(u["username"])
     return StreamingResponse(
         rag_answer_stream(req.question, k=req.k, session_id=req.session_id),
         media_type="application/x-ndjson",
