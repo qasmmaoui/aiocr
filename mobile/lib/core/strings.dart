@@ -66,7 +66,7 @@ class S {
   String get extractedText => ar ? 'النص المستخرَج' : 'Texte extrait';
   String get citedPassage =>
       ar ? 'المقتطف المُحال عليه' : 'Passage cité';
-  String get usageOf(int used, int limit) => ar
+  String usageOf(int used, int limit) => ar
       ? '$used / $limit سؤالاً هذا الشهر'
       : '$used / $limit questions ce mois';
   String get unlimited => ar ? 'بلا حدود' : 'Illimité';

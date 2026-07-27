@@ -63,7 +63,7 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Widget _pill(String t, Color c) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
         decoration: BoxDecoration(
-            color: c.withOpacity(.12),
+            color: c.withValues(alpha: .12),
             borderRadius: BorderRadius.circular(999)),
         child: Text(t, style: TextStyle(fontSize: 11.5, color: c)),
       );

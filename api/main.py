@@ -82,6 +82,14 @@ app.include_router(chat_ui_router)
 from api.mobile_auth import router as mobile_auth_router  # noqa: E402
 app.include_router(mobile_auth_router)
 
+# App mobile (build web Flutter) servie sur /app — même origine que l'API
+import os as _os  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+_APP_WEB = _os.path.join(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))), "mobile", "build", "web")
+if _os.path.isdir(_APP_WEB):
+    app.mount("/app", StaticFiles(directory=_APP_WEB, html=True), name="app")
+
 
 @app.on_event("startup")
 def _init_api_keys():
