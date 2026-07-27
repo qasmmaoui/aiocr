@@ -151,6 +151,25 @@ def _strip_watermark_png(pix) -> bytes:
     return clean.tobytes("png")
 
 
+@router.get("/chunk-info")
+def chunk_info(file: str = Query(...), chunk: str = Query("-")):
+    """Métadonnées d'un chunk pour les clients natifs (mobile) :
+    page résolue, nombre de pages, statut de version."""
+    path = _resolve_pdf(file)
+    doc = fitz.open(path)
+    npages = len(doc)
+    doc.close()
+    rec = _chunk_index().get((os.path.basename(file), str(chunk)))
+    return {
+        "page": (rec or {}).get("page") or 1,
+        "npages": npages,
+        "law": (rec or {}).get("law", ""),
+        "status": (rec or {}).get("status", "current"),
+        "amended_by": (rec or {}).get("amended_by", []),
+        "page_exact": bool(rec and rec.get("page_src") == "match"),
+    }
+
+
 @router.get("/page-image")
 def page_image(file: str = Query(...), page: int = Query(1, ge=1),
                chunk: str | None = Query(None), clean: int = Query(0)):
