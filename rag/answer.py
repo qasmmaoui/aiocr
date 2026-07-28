@@ -368,7 +368,8 @@ def _quote_warning(text: str, hits: list[dict]) -> str:
 #  API publique
 # ══════════════════════════════════════════════════════════════════════════
 def answer(question: str, k: int = 6, session_id: str | None = None,
-           history: list[dict] | None = None) -> dict:
+           history: list[dict] | None = None, matiere: str | None = None,
+           strict: bool = False) -> dict:
     """`history` explicite (mode OpenAI, sans état) court-circuite la session
     interne : pas de lecture ni de persistance mémoire."""
     question = (question or "").strip()
@@ -383,7 +384,7 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     else:
         history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
-    hits = search_laws(search_q, limit=k)
+    hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
     if not hits:
         return {
             "answer": "لم أعثر على نصوص قانونية ذات صلة بسؤالك في المدوّنة الحالية.",
@@ -410,7 +411,8 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
 
 
 def answer_stream(question: str, k: int = 6, session_id: str | None = None,
-                  history: list[dict] | None = None):
+                  history: list[dict] | None = None, matiere: str | None = None,
+                  strict: bool = False):
     """Générateur NDJSON : {"sources":[…]} puis {"delta":"…"}* puis {"done":true}.
     `history` explicite -> mode sans état (voir answer())."""
     question = (question or "").strip()
@@ -430,7 +432,7 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     else:
         history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
-    hits = search_laws(search_q, limit=k)
+    hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
     yield json.dumps({"sources": _sources(hits), "search_query": search_q},
                      ensure_ascii=False) + "\n"
 

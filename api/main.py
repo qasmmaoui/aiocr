@@ -231,6 +231,8 @@ class ChatRequest(BaseModel):
     question: str
     k: int = 6
     session_id: str | None = None      # mémoire de conversation (optionnelle)
+    matiere: str | None = None         # domaine priorisé (penal, commercial…)
+    strict: bool = False               # True = restreint réellement à la matière
 
 
 @app.get("/api/laws/search")
@@ -255,9 +257,28 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
         check_quota(u["username"])
         count_question(u["username"])
     return StreamingResponse(
-        rag_answer_stream(req.question, k=req.k, session_id=req.session_id),
+        rag_answer_stream(req.question, k=req.k, session_id=req.session_id,
+                          matiere=getattr(req, "matiere", None),
+                          strict=bool(getattr(req, "strict", False))),
         media_type="application/x-ndjson",
     )
+
+@app.get("/api/matieres")
+def list_matieres():
+    """Matières proposées au client, avec le nombre de textes disponibles."""
+    from rag.matieres import MATIERES
+    from rag import store
+    try:
+        counts = {c.name: store.client().count(c.name).count
+                  for c in store.client().get_collections().collections}
+    except Exception:
+        counts = {}
+    out = []
+    for key, m in MATIERES.items():
+        n = sum(counts.get(c, 0) for c in m["collections"])
+        out.append({"key": key, "ar": m["ar"], "fr": m["fr"], "chunks": n,
+                    "disponible": n > 0})
+    return {"matieres": out}
 
 
 # ── Sessions de conversation (mémoire) ───────────────────────────────────

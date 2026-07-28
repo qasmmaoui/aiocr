@@ -11,15 +11,25 @@ if str(_ROOT) not in sys.path:
 
 from rag.embeddings import embed
 from rag import store
+from rag.matieres import boost_hits, collections_for
 
 # Corpus juridiques interrogés (ajouter les nouveaux ici : laws_civil, ...).
 COLLECTIONS = ["laws_commercial", "laws_penal"]
 
 
-def search_laws(query: str, limit: int = 6, collections: list[str] | None = None) -> list[dict]:
+def search_laws(query: str, limit: int = 6, collections: list[str] | None = None,
+                matiere: str | None = None, strict: bool = False) -> list[dict]:
+    """`matiere` priorise un domaine (pénal, commercial…) sans masquer les
+    autres ; `strict=True` restreint réellement la recherche."""
     query = (query or "").strip()
     if not query:
         return []
+    if collections is None and matiere:
+        try:
+            available = {c.name for c in store.client().get_collections().collections}
+        except Exception:
+            available = None
+        collections = collections_for(matiere, strict=strict, available=available)
     qvec = embed(query)
     hits: list[dict] = []
     for col in (collections or COLLECTIONS):
@@ -27,6 +37,7 @@ def search_laws(query: str, limit: int = 6, collections: list[str] | None = None
             for h in store.search(col, qvec, limit=limit):
                 h["collection"] = col
                 hits.append(h)
+    hits = boost_hits(hits, matiere)
     hits.sort(key=lambda h: h.get("score", 0), reverse=True)
     return hits[:limit]
 
