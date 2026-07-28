@@ -15,15 +15,17 @@ import fitz
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 
-LAWS_DIR = r"Y:\adala-project\laws"
-PAGED_CORPUS = r"Y:\adala-project\aiocr_data\laws_corpus_v2.jsonl"
+# Chemins surchargeables (le pod Linux n'a pas les lettres de lecteur Windows)
+LAWS_DIR = os.environ.get("RIMLEX_LAWS_DIR", r"Y:\adala-project\laws")
+_DATA = os.environ.get("RIMLEX_DATA_DIR", r"Y:\adala-project\aiocr_data")
+PAGED_CORPUS = os.path.join(_DATA, "laws_corpus_v2.jsonl")
 # Incrémenter à chaque évolution du rendu (casse le cache navigateur des images)
 RENDER_VERSION = 2
 
 router = APIRouter(prefix="/api/viewer")
 
 
-ADALA_DIR = r"Y:\adala-project\adala_pdfs"
+ADALA_DIR = os.environ.get("RIMLEX_ADALA_DIR", r"Y:\adala-project\adala_pdfs")
 
 
 @lru_cache(maxsize=1)

@@ -172,7 +172,9 @@ def _expand(hit: dict, back: int = 4) -> str:
 
 
 _VERSION_INDEX: dict | None = None
-_VERSION_CORPUS = r"Y:\adala-project\aiocr_data\laws_corpus_v2.jsonl"
+_VERSION_CORPUS = os.path.join(
+    os.environ.get("RIMLEX_DATA_DIR", r"Y:\adala-project\aiocr_data"),
+    "laws_corpus_v2.jsonl")
 
 
 def _version_info(h: dict) -> dict | None:

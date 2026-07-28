@@ -42,11 +42,11 @@ OUT = os.path.join(WORK, "ocr_results")
 DB = os.path.join(WORK, "checkpoint.db")
 
 ENGINE_A = {"kind": "ollama", "url": "http://127.0.0.1:11434",
-            "model": "nanonets-ocr"}
-ENGINE_B = {"kind": "openai", "url": "http://127.0.0.1:8001/v1",
-            "model": "dots-ocr"}
-ARBITER = {"kind": "openai", "url": "http://127.0.0.1:8002/v1",
-           "model": "qwen2.5-vl-72b"}
+            "model": os.environ.get("OCR_A", "qwen2.5vl:32b")}
+ENGINE_B = {"kind": "ollama", "url": "http://127.0.0.1:11434",
+            "model": os.environ.get("OCR_B", "qwen2.5vl:7b")}
+ARBITER = {"kind": "ollama", "url": "http://127.0.0.1:11434",
+           "model": os.environ.get("OCR_ARBITER", "qwen2.5vl:32b")}
 
 PROMPT = ("Extract the full text of this document page in natural reading "
           "order. Arabic text must be preserved exactly, including all "
@@ -123,12 +123,17 @@ def db():
 
 
 def list_pdfs():
+    """Parcours RÉCURSIF : les collections ont des sous-dossiers
+    (laws/penal/penalAR/…) — un seul niveau ne voyait aucun fichier."""
     out = []
     for q in sorted(os.listdir(INPUT)):
         qd = os.path.join(INPUT, q)
-        if os.path.isdir(qd):
-            out += [(q, os.path.join(qd, f)) for f in sorted(os.listdir(qd))
-                    if f.lower().endswith(".pdf")]
+        if not os.path.isdir(qd):
+            continue
+        for dp, _dn, fn in os.walk(qd):
+            for f in sorted(fn):
+                if f.lower().endswith(".pdf"):
+                    out.append((q, os.path.join(dp, f)))
     return out
 
 

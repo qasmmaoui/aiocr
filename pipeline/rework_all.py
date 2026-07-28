@@ -25,6 +25,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STEPS = [
     ("ingest inbox", [sys.executable, "-X", "utf8", "pipeline/ingest.py", "add"]),
     ("registre complet", [sys.executable, "-X", "utf8", "pipeline/ingest.py", "init"]),
+    ("meilleure édition par loi",
+     [sys.executable, "-X", "utf8", "pipeline/select_best_edition.py"]),
+    ("liste d'entrée du corpus",
+     [sys.executable, "-X", "utf8", "pipeline/build_corpus_input.py"]),
     ("graphe de versions", [sys.executable, "-X", "utf8", "pipeline/version_graph.py"]),
     ("pages PDF", [sys.executable, "-X", "utf8", "pipeline/page_map.py"]),
     ("index jurisprudence", [sys.executable, "-X", "utf8", "pipeline/juris_index.py"]),

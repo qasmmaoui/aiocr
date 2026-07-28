@@ -21,7 +21,7 @@ import time
 from fastapi import Cookie, HTTPException
 from fastapi.responses import RedirectResponse
 
-DATA_DIR = r"Y:\adala-project\aiocr_data"
+DATA_DIR = os.environ.get("RIMLEX_DATA_DIR", r"Y:\adala-project\aiocr_data")
 DB = os.path.join(DATA_DIR, "app.db")
 LEGACY_FEEDBACK_DB = os.path.join(DATA_DIR, "feedback.db")
 SECRET_FILE = os.path.join(DATA_DIR, "secret_key.txt")

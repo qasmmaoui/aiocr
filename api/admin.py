@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from api import admin_core as core
 from api.admin_core import page, require, svg_bars
 
-DATA = r"Y:\adala-project\aiocr_data"
+DATA = os.environ.get("RIMLEX_DATA_DIR", r"Y:\adala-project\aiocr_data")
 REGISTRY = os.path.join(DATA, "registry.json")
 CORPUS = os.path.join(DATA, "laws_corpus_v2.jsonl")
 GRAPH = os.path.join(DATA, "version_graph.json")
@@ -38,7 +38,7 @@ JURIS_TEXTS = os.path.join(DATA, "juris_texts.jsonl")
 JURIS_INDEX = os.path.join(DATA, "juris_index.json")
 RELATIONS = os.path.join(DATA, "relations.json")
 QUALITY = os.path.join(DATA, "ocr_quality.json")
-JURIS_DIR = r"Z:\jurisprudence"
+JURIS_DIR = os.environ.get("RIMLEX_JURIS_DIR", r"Z:\jurisprudence")
 
 router = APIRouter(prefix="/api/admin")
 

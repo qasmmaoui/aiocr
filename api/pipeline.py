@@ -23,7 +23,9 @@ from api import admin_core as core
 from api.admin_core import page, require
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOGS = r"Y:\adala-project\aiocr_data\pipeline_logs"
+LOGS = os.path.join(
+    os.environ.get("RIMLEX_DATA_DIR", r"Y:\adala-project\aiocr_data"),
+    "pipeline_logs")
 
 router = APIRouter(prefix="/api/admin/pipeline")
 
@@ -81,6 +83,12 @@ JOBS = {
         "desc": "يعيد بناء كل شيء بالترتيب الصحيح: إدخال ← سجل ← نسخ ← صفحات ← فهرس الاجتهاد ← إحالات ← جودة ← تقييم ← نسخة احتياطية. يتوقف عند أول خطأ.",
         "cmd": [sys.executable, "-X", "utf8", "pipeline/rework_all.py"],
         "minutes": "45–90 دقيقة",
+    },
+    "select_edition": {
+        "label": "اختيار أفضل نسخة لكل قانون",
+        "desc": "يقارن نسخ PMP / عدالة / laws لكل قانون (اكتمال المواد، جودة الاستخراج، حداثة النص) ويحتفظ بالأفضل. النتيجة: editions_choisies.json + لائحة الحالات المتقاربة للمراجعة.",
+        "cmd": [sys.executable, "-X", "utf8", "pipeline/select_best_edition.py"],
+        "minutes": "5–10 دقائق",
     },
     "dedup_clean": {
         "label": "عزل المكررات الداخلية",

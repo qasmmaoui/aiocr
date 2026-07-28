@@ -82,9 +82,11 @@ def usage_of(username: str) -> dict:
     with core.conn() as c:
         row = c.execute("SELECT questions FROM usage WHERE username=? AND month=?",
                         (username, _month())).fetchone()
-        plan = (c.execute("SELECT plan FROM users WHERE username=?",
-                          (username,)).fetchone() or {"plan": "free"})["plan"] or "free"
-    limit = PLANS.get(plan, 10)
+        u = c.execute("SELECT plan, role FROM users WHERE username=?",
+                      (username,)).fetchone()
+    plan = (u["plan"] if u else None) or "free"
+    role = u["role"] if u else "viewer"
+    limit = None if role in ("admin", "validator") else PLANS.get(plan, 10)
     return {"plan": plan, "used": row["questions"] if row else 0,
             "limit": limit, "month": _month()}
 
@@ -97,6 +99,13 @@ def count_question(username: str) -> None:
 
 
 def check_quota(username: str) -> None:
+    """Les comptes internes (مدير / مراجع) ne sont pas soumis aux quotas :
+    ceux-ci servent aux offres commerciales, pas à l'exploitation."""
+    with core.conn() as c:
+        r = c.execute("SELECT role FROM users WHERE username=?",
+                      (username,)).fetchone()
+    if r and r["role"] in ("admin", "validator"):
+        return
     u = usage_of(username)
     if u["limit"] is not None and u["used"] >= u["limit"]:
         raise HTTPException(429, "بلغت حدّ خطتك لهذا الشهر — قم بالترقية للمتابعة.")
