@@ -20,7 +20,7 @@ LAWS_DIR = os.environ.get("RIMLEX_LAWS_DIR", r"Y:\adala-project\laws")
 _DATA = os.environ.get("RIMLEX_DATA_DIR", r"Y:\adala-project\aiocr_data")
 PAGED_CORPUS = os.path.join(_DATA, "laws_corpus_v2.jsonl")
 # Incrémenter à chaque évolution du rendu (casse le cache navigateur des images)
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 
 router = APIRouter(prefix="/api/viewer")
 
@@ -119,22 +119,55 @@ def samples(n: int = Query(30, ge=1, le=200)):
 {''.join(rows)}</table></body></html>"""
 
 
+_HL_DIAC = re.compile(r"[ً-ٰٟـ]")
+
+
+def _hl_norm(s: str) -> str:
+    """Normalisation tolérante : diacritiques, formes de l'alef/ya/ta, et
+    tout ce qui n'est pas lettre arabe ou chiffre. Indispensable car la couche
+    texte des PDF arabes déforme les ligatures et les espaces."""
+    s = _HL_DIAC.sub("", s or "")
+    s = (s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+           .replace("ٱ", "ا").replace("ى", "ي").replace("ة", "ه")
+           .replace("ؤ", "و").replace("ئ", "ي"))
+    return re.sub(r"[^؀-ۿ0-9]", "", s)
+
+
 def _highlight_rects(pg, chunk_text: str) -> list:
-    """Rectangles du texte du chunk retrouvé sur la page (recherche par segments)."""
-    rects = []
-    for line in (chunk_text or "").splitlines():
-        seg = " ".join(line.split()).strip()
-        if len(seg) < 12:
+    """Rectangles à surligner : appariement MOT À MOT entre le texte normalisé
+    de la page et celui du chunk (la recherche exacte échouait à cause des
+    ligatures cassées et des espaces parasites de la couche texte)."""
+    target = _hl_norm(chunk_text)
+    if len(target) < 20:
+        return []
+    try:
+        words = pg.get_text("words")          # (x0,y0,x1,y1, mot, ...)
+    except Exception:
+        return []
+    if not words:
+        return []
+
+    # chaîne normalisée de la page + table position -> index du mot
+    page_chars, owner = [], []
+    for i, w in enumerate(words):
+        n = _hl_norm(w[4])
+        if not n:
             continue
-        # segments moyens : assez longs pour être uniques, assez courts pour
-        # survivre aux différences OCR/couche texte
-        for piece in (seg[i:i + 40] for i in range(0, len(seg), 40)):
-            if len(piece) >= 12:
-                try:
-                    rects += pg.search_for(piece)
-                except Exception:
-                    pass
-    return rects
+        page_chars.append(n)
+        owner.extend([i] * len(n))
+    page_norm = "".join(page_chars)
+    if not page_norm:
+        return []
+
+    import difflib
+    sm = difflib.SequenceMatcher(None, page_norm, target, autojunk=False)
+    hit = set()
+    for a, _b, size in sm.get_matching_blocks():
+        if size < 12:                          # ignore les coïncidences courtes
+            continue
+        for pos in range(a, min(a + size, len(owner))):
+            hit.add(owner[pos])
+    return [fitz.Rect(words[i][:4]) for i in sorted(hit)]
 
 
 def _strip_watermark_png(pix) -> bytes:
