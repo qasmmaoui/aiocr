@@ -8,6 +8,7 @@ Chat juridique (RAG grounded) avec mémoire de conversation :
 La réponse est STRICTEMENT basée sur les textes récupérés (anti-hallucination).
 """
 import json
+import os
 import re
 import requests
 
@@ -21,7 +22,7 @@ try:
 except Exception:  # pragma: no cover
     Filter = None
 
-CHAT_MODEL = "qwen2.5:72b"
+CHAT_MODEL = os.environ.get("RIMLEX_CHAT_MODEL", "qwen2.5:32b")
 
 GEN_OPTIONS = {
     "temperature": 0.2, "num_ctx": 16384, "num_predict": 1200,
