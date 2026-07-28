@@ -38,6 +38,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final scrollC = ScrollController();
   bool busy = false;
   late Conversation convo;
+  String matiere = 'all';                 // matière priorisée
+  List<Map<String, dynamic>> matieres = [];
 
   @override
   void initState() {
@@ -50,6 +52,9 @@ class _ChatScreenState extends State<ChatScreen> {
       msgs.add(Msg(m.me, m.text,
           sources: m.sources.map(Source.fromJson).toList()));
     }
+    Api.I.matieres().then((l) {
+      if (mounted) setState(() => matieres = l.where((m) => m['disponible'] == true).toList());
+    });
   }
 
   Future<void> _ask(String q) async {
@@ -64,7 +69,7 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scroll();
     try {
-      await for (final ev in Api.I.ask(q.trim())) {
+      await for (final ev in Api.I.ask(q.trim(), matiere: matiere)) {
         if (ev.sources != null) a.sources = ev.sources!;
         if (ev.delta != null) a.text += ev.delta!;
         if (mounted) setState(() {});
@@ -215,7 +220,21 @@ class _ChatScreenState extends State<ChatScreen> {
                 color: rl.surface,
                 border: Border(top: BorderSide(color: rl.hairline))),
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-            child: Row(children: [
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (matieres.isNotEmpty)
+                SizedBox(
+                  height: 34,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      _matChip('all', s.ar ? 'كل المواد' : 'Toutes'),
+                      for (final m in matieres)
+                        _matChip(m['key'] as String,
+                            (s.ar ? m['ar'] : m['fr']) as String),
+                    ],
+                  ),
+                ),
+              Row(children: [
               Expanded(
                 child: TextField(
                     controller: inputC,
@@ -243,6 +262,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         s.ar ? Icons.arrow_back : Icons.arrow_forward,
                         size: 22)),
               ),
+            ]),
             ]),
           ),
         ),
@@ -332,6 +352,29 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+
+  Widget _matChip(String key, String label) {
+    final rl = context.rl;
+    final on = matiere == key;
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 6),
+      child: InkWell(
+        onTap: () => setState(() => matiere = key),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+              color: on ? rl.primary : Colors.transparent,
+              border: Border.all(color: on ? rl.primary : rl.hairline),
+              borderRadius: BorderRadius.circular(999)),
+          child: Text(label,
+              style: TextStyle(
+                  fontSize: 12.5,
+                  color: on ? Colors.white : rl.meta,
+                  fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+        ),
+      ),
+    );
+  }
 
   Widget _actBtn(IconData ic, String label, VoidCallback onTap) {
     final rl = context.rl;

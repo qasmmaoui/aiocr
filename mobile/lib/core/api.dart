@@ -117,8 +117,23 @@ class Api {
     }
   }
 
+  /// Matières proposées par le serveur (clé, libellés, disponibilité).
+  Future<List<Map<String, dynamic>>> matieres() async {
+    try {
+      final r = await http.get(Uri.parse('$base/api/matieres')).timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) return [];
+      final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      return ((j['matieres'] ?? []) as List)
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   /// Chat en streaming NDJSON : émet d'abord les sources, puis les deltas.
-  Stream<ChatEvent> ask(String question, {String? sessionId}) async* {
+  Stream<ChatEvent> ask(String question,
+      {String? sessionId, String? matiere}) async* {
     var attempt = 0;
     while (true) {
       final req = http.Request('POST', Uri.parse('$base/api/chat/stream'))
@@ -129,7 +144,8 @@ class Api {
         ..body = jsonEncode({
           'question': question,
           'k': 6,
-          if (sessionId != null) 'session_id': sessionId
+          if (sessionId != null) 'session_id': sessionId,
+          if (matiere != null && matiere != 'all') 'matiere': matiere,
         });
       final resp = await http.Client().send(req);
       if (resp.statusCode == 401 && attempt == 0 && await refreshTokens()) {
