@@ -90,6 +90,18 @@ _APP_WEB = _os.path.join(_os.path.dirname(_os.path.dirname(
 if _os.path.isdir(_APP_WEB):
     app.mount("/app", StaticFiles(directory=_APP_WEB, html=True), name="app")
 
+    @app.middleware("http")
+    async def _no_cache_app(request, call_next):
+        """Phase de développement : le service worker du build web garde
+        l'ancienne version des jours durant sur mobile. On interdit donc la
+        mise en cache de /app — à retirer quand les versions seront figées."""
+        response = await call_next(request)
+        if request.url.path.startswith("/app"):
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
 
 @app.on_event("startup")
 def _init_api_keys():
