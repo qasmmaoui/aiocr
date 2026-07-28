@@ -1,20 +1,22 @@
 // L'écran-roi : chat streaming, chips sources, badges de version,
 // boucle expert (صحيح/خطأ/أعترض) avec fiche d'اعتراض.
-import 'dart:convert';
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api.dart';
+import '../core/history.dart';
 import '../core/theme.dart';
 import '../main.dart';
 import '../shared/gazelle.dart';
+import 'history.dart';
 import 'settings.dart';
 import 'viewer.dart';
 
 class Msg {
   final bool me;
   String text;
+  String? question;          // question ayant produit cette réponse
   List<Source> sources;
   bool streaming;
   bool error;
@@ -24,7 +26,8 @@ class Msg {
 }
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  final Conversation? conversation;   // reprise d'une discussion existante
+  const ChatScreen({super.key, this.conversation});
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
@@ -34,12 +37,26 @@ class _ChatScreenState extends State<ChatScreen> {
   final inputC = TextEditingController();
   final scrollC = ScrollController();
   bool busy = false;
+  late Conversation convo;
+
+  @override
+  void initState() {
+    super.initState();
+    convo = widget.conversation ??
+        Conversation(
+            id: History.newId(), title: '', updated: DateTime.now(),
+            messages: []);
+    for (final m in convo.messages) {
+      msgs.add(Msg(m.me, m.text,
+          sources: m.sources.map(Source.fromJson).toList()));
+    }
+  }
 
   Future<void> _ask(String q) async {
     if (q.trim().isEmpty || busy) return;
     final s = AppState.of(context).s;
     inputC.clear();
-    final a = Msg(false, '', streaming: true);
+    final a = Msg(false, '', streaming: true)..question = q.trim();
     setState(() {
       msgs.add(Msg(true, q.trim()));
       msgs.add(a);
@@ -72,15 +89,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _saveHistory(String q, Msg a) async {
     try {
-      final p = await SharedPreferences.getInstance();
-      final h = (jsonDecode(p.getString('history') ?? '[]') as List);
-      h.insert(0, {
-        'q': q,
-        'law': a.sources.isNotEmpty ? a.sources.first.law : '',
-        'n': a.sources.length,
-        'ts': DateTime.now().toIso8601String(),
-      });
-      await p.setString('history', jsonEncode(h.take(100).toList()));
+      if (convo.title.isEmpty) convo.title = History.titleFrom(q);
+      convo.messages = [
+        for (final m in msgs)
+          StoredMessage(m.me, m.text, [
+            for (final s in m.sources)
+              {'law': s.law, 'file': s.file, 'article': s.article,
+               'chunk': s.chunk}
+          ])
+      ];
+      await History.save(convo);
     } catch (_) {}
   }
 
@@ -160,8 +178,18 @@ class _ChatScreenState extends State<ChatScreen> {
         actions: [
           IconButton(
               tooltip: s.newChat,
-              onPressed: () => setState(() => msgs.clear()),
+              onPressed: () => setState(() {
+                    msgs.clear();
+                    convo = Conversation(
+                        id: History.newId(), title: '',
+                        updated: DateTime.now(), messages: []);
+                  }),
               icon: const Icon(Icons.add_comment_outlined)),
+          IconButton(
+              tooltip: s.history,
+              onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const HistoryScreen())),
+              icon: const Icon(Icons.history)),
           IconButton(
               tooltip: s.settings,
               onPressed: () => Navigator.of(context).push(
@@ -229,7 +257,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (m.me) {
       return Align(
         alignment: AlignmentDirectional.centerStart,
-        child: Container(
+        child: GestureDetector(
+          onLongPress: () => _copy(m.text, s.copied),
+          child: Container(
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
           constraints: BoxConstraints(
@@ -241,8 +271,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   topEnd: Radius.circular(16),
                   bottomStart: Radius.circular(16),
                   bottomEnd: Radius.circular(16))),
-          child: Text(m.text,
-              style: tt.bodyLarge!.copyWith(color: Colors.white, height: 1.7)),
+            child: Text(m.text,
+                style: tt.bodyLarge!.copyWith(color: Colors.white, height: 1.7)),
+          ),
         ),
       );
     }
@@ -282,17 +313,44 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
         if (!m.streaming && !m.error && m.text.isNotEmpty) ...[
           const SizedBox(height: 10),
-          Row(children: [
+          Wrap(spacing: 6, runSpacing: 6, children: [
             _fbBtn(m, 'up', Icons.thumb_up_outlined, s.correct),
-            const SizedBox(width: 6),
             _fbBtn(m, 'down', Icons.thumb_down_outlined, s.wrong),
-            const SizedBox(width: 6),
             _fbBtn(m, 'contest', Icons.balance, s.contest,
                 onTap: () => _contestSheet(m)),
+            _actBtn(Icons.copy_outlined, s.copyAnswer,
+                () => _copy(m.text, s.copied)),
+            if (m.question != null)
+              _actBtn(Icons.refresh, s.resubmit, () => _ask(m.question!)),
           ]),
         ],
       ]),
     );
+  }
+
+
+  Widget _actBtn(IconData ic, String label, VoidCallback onTap) {
+    final rl = context.rl;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+            border: Border.all(color: rl.hairline),
+            borderRadius: BorderRadius.circular(999)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(ic, size: 15, color: rl.meta),
+          const SizedBox(width: 5),
+          Text(label, style: TextStyle(fontSize: 12.5, color: rl.meta)),
+        ]),
+      ),
+    );
+  }
+
+  void _copy(String text, String done) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(done)));
   }
 
   Widget _fbBtn(Msg m, String type, IconData ic, String label,

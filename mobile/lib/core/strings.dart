@@ -83,6 +83,14 @@ class S {
   String get yesterday => ar ? 'أمس' : 'Hier';
   String get newChat => ar ? 'محادثة جديدة' : 'Nouvelle conversation';
   String get serverUrl => ar ? 'عنوان الخادم' : 'Adresse du serveur';
+  String get copyAnswer => ar ? 'نسخ' : 'Copier';
+  String get copied => ar ? 'تم النسخ' : 'Copié';
+  String get resubmit => ar ? 'إعادة السؤال' : 'Relancer';
+  String get openConversation => ar ? 'فتح المحادثة' : 'Ouvrir';
+  String get deleteConversation => ar ? 'حذف' : 'Supprimer';
+  String get noHistory => ar ? 'لا محادثات محفوظة بعد' : 'Aucune conversation';
+  String get continueHere => ar ? 'تابع من هنا…' : 'Continuez ici…';
+  String get messages => ar ? 'رسالة' : 'messages';
   String get genFailed => ar
       ? 'تعذّر إتمام الجواب — أعد المحاولة'
       : 'Réponse interrompue — réessayez';
