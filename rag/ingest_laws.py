@@ -67,7 +67,8 @@ def extract_text(pdf_path: str) -> str:
             parts.append(light_clean(raw.strip()))
         elif DO_OCR or FORCE_OCR:
             try:
-                pix = page.get_pixmap(dpi=300, colorspace=fitz.csGRAY, alpha=False)
+                pix = page.get_pixmap(dpi=int(os.environ.get("OCR_DPI", "200")),
+                                      colorspace=fitz.csGRAY, alpha=False)
                 b64 = base64.b64encode(pix.tobytes("png")).decode()
                 parts.append(run_ocr_on_page({"image_b64": b64}))
             except Exception as e:
