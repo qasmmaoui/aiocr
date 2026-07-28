@@ -311,17 +311,21 @@ class _ChatScreenState extends State<ChatScreen> {
               _SourceChip(index: i + 1, source: m.sources[i]),
           ]),
         ],
-        if (!m.streaming && !m.error && m.text.isNotEmpty) ...[
+        if (!m.streaming && m.text.isNotEmpty) ...[
           const SizedBox(height: 10),
           Wrap(spacing: 6, runSpacing: 6, children: [
-            _fbBtn(m, 'up', Icons.thumb_up_outlined, s.correct),
-            _fbBtn(m, 'down', Icons.thumb_down_outlined, s.wrong),
-            _fbBtn(m, 'contest', Icons.balance, s.contest,
-                onTap: () => _contestSheet(m)),
-            _actBtn(Icons.copy_outlined, s.copyAnswer,
-                () => _copy(m.text, s.copied)),
+            // en cas d'échec, seules les actions utiles restent : relancer,
+            // copier — juger une réponse qui n'existe pas n'a pas de sens.
+            if (!m.error) ...[
+              _fbBtn(m, 'up', Icons.thumb_up_outlined, s.correct),
+              _fbBtn(m, 'down', Icons.thumb_down_outlined, s.wrong),
+              _fbBtn(m, 'contest', Icons.balance, s.contest,
+                  onTap: () => _contestSheet(m)),
+            ],
             if (m.question != null)
               _actBtn(Icons.refresh, s.resubmit, () => _ask(m.question!)),
+            _actBtn(Icons.copy_outlined, s.copyAnswer,
+                () => _copy(m.text, s.copied)),
           ]),
         ],
       ]),

@@ -5,10 +5,12 @@ Endpoints publics (lecture seule, documents légaux publics) :
     GET /api/viewer?file=..&chunk=..          page HTML côte à côte
     GET /api/viewer/page-image?file=..&page=N rendu PNG de la page
 """
+import difflib
 import glob
 import html
 import json
 import os
+import re
 from functools import lru_cache
 
 import fitz
@@ -159,7 +161,6 @@ def _highlight_rects(pg, chunk_text: str) -> list:
     if not page_norm:
         return []
 
-    import difflib
     sm = difflib.SequenceMatcher(None, page_norm, target, autojunk=False)
     hit = set()
     for a, _b, size in sm.get_matching_blocks():
