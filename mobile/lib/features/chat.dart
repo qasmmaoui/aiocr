@@ -69,7 +69,8 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scroll();
     try {
-      await for (final ev in Api.I.ask(q.trim(), matiere: matiere)) {
+      await for (final ev in Api.I.ask(q.trim(),
+          matiere: matiere, sessionId: convo.id)) {
         if (ev.sources != null) a.sources = ev.sources!;
         if (ev.delta != null) a.text += ev.delta!;
         if (mounted) setState(() {});
