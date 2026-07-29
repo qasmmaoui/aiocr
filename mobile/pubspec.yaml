@@ -1,0 +1,36 @@
+name: rimlex_mobile
+description: "RimLex — assistant juridique. Chaque réponse prouve sa source."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  shared_preferences: ^2.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: PlexArabic
+      fonts:
+        - asset: assets/fonts/IBMPlexSansArabic-Regular.ttf
+        - asset: assets/fonts/IBMPlexSansArabic-SemiBold.ttf
+          weight: 600
+    - family: PlexSerif
+      fonts:
+        - asset: assets/fonts/IBMPlexSerif-Regular.ttf
+    - family: PlexMono
+      fonts:
+        - asset: assets/fonts/IBMPlexMono-Regular.ttf
+    - family: Mansour
+      fonts:
+        - asset: assets/fonts/Mansour.ttf

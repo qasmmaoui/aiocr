@@ -9,13 +9,14 @@ Description :
 """
 
 import base64
+import os
 from typing import Callable
 
 from ollama import Client as OllamaClient
 
 from core.config import OLLAMA_BASE_URL, LLM_OPTIONS
 from core.utils import get_vision_model
-from services.correction_service import correct_text
+from services.correction_service import correct_text, light_clean
 
 
 # ── Client Ollama (singleton) ─────────────────────────────────────────────
@@ -35,13 +36,20 @@ def ocr_tesseract(image_b64: str) -> str | None:
     Retourne le texte corrigé, ou None si Tesseract n'est pas installé.
     """
     try:
+        import os
         import pytesseract
         from PIL import Image
         import io
 
-        pytesseract.pytesseract.tesseract_cmd = (
-            r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        )
+        # Windows : chemin explicite si l'exécutable existe.
+        # Linux / Docker : tesseract est dans le PATH, ne rien forcer.
+        _win_tess = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        _env_tess = os.environ.get("TESSERACT_CMD")
+        if _env_tess:
+            pytesseract.pytesseract.tesseract_cmd = _env_tess
+        elif os.path.exists(_win_tess):
+            pytesseract.pytesseract.tesseract_cmd = _win_tess
+
         img_bytes = base64.b64decode(image_b64)
         img = Image.open(io.BytesIO(img_bytes))
         raw = pytesseract.image_to_string(img, lang="ara+fra", config="--psm 6 --oem 3")
@@ -58,18 +66,29 @@ def ocr_ollama_vision(image_b64: str) -> str:
     """
     Utilise un modèle vision Ollama pour extraire le texte d'une image.
     """
-    model = get_vision_model()
+    model = os.environ.get("OCR_MODEL") or get_vision_model()
+    # Prompt renforcé (mesuré : l'ancien omettait les lignes d'en-tête —
+    # ville, date, numéro de circulaire — critiques en matière juridique).
+    prompt = (
+        "أنت نظام OCR دقيق جداً. انسخ حرفياً كل سطر ظاهر في هذه الصورة، "
+        "من الأعلى إلى الأسفل ومن اليمين إلى اليسار، دون إغفال أي سطر. "
+        "أدرج بالخصوص: الترويسات، اسم الوزارة والمديرية، المدينة والتاريخ، "
+        "أرقام المناشير والظهائر والمراسيم، أسماء المرسل والمرسل إليه، "
+        "أرقام المواد والفصول، الهوامش وأرقام الصفحات. "
+        "حافظ على الأرقام وعلامات الترقيم وفواصل الأسطر كما هي. "
+        "لا تُضف أي تعليق أو شرح أو ترجمة، وأخرِج النص فقط."
+    )
     try:
         response = _get_client().generate(
             model=model,
-            prompt="انسخ كل النص في هذه الصورة سطراً بسطر.",
+            prompt=prompt,
             images=[image_b64],
             options=LLM_OPTIONS,
             stream=False,
         )
         raw = response.get("response", "").strip()
-        corrected, _ = correct_text(raw)
-        return corrected
+        # Sortie du modèle vision déjà propre : nettoyage léger seulement.
+        return light_clean(raw)
     except Exception as e:
         return f"[ERR Ollama Vision: {e}]"
 
@@ -86,14 +105,13 @@ def run_ocr_on_page(page: dict) -> str:
         Texte extrait et corrigé.
     """
     image_b64 = page.get("image_b64", "")
-    result = ocr_tesseract(image_b64)
 
-    # Si Tesseract échoue ou retourne une erreur, on bascule sur Ollama
+    # Modèle vision (Qwen2.5-VL) en priorité : bien plus précis que Tesseract
+    # pour l'arabe. Tesseract sert uniquement de secours si Ollama échoue.
+    result = ocr_ollama_vision(image_b64)
+
     if result is None or result.startswith("[ERR"):
-        result = ocr_ollama_vision(image_b64)
-
-    if result and not result.startswith("[ERR"):
-        result, _ = correct_text(result)
+        result = ocr_tesseract(image_b64)
 
     return result or ""
 

@@ -21,3 +21,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/ 
+
+# livrables volumineux (APK) — distribués hors dépôt
+dist/*.apk
