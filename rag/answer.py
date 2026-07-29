@@ -26,7 +26,9 @@ CHAT_MODEL = os.environ.get("RIMLEX_CHAT_MODEL", "qwen2.5:32b")
 
 GEN_OPTIONS = {
     "temperature": 0.2, "num_ctx": 16384, "num_predict": 1200,
-    "repeat_penalty": 1.25, "repeat_last_n": 256,
+    # 1.25 poussait le modèle hors distribution sur l'arabe (mots-outils très
+    # répétés) et provoquait des bascules vers d'autres écritures.
+    "repeat_penalty": 1.08, "repeat_last_n": 128,
 }
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -67,7 +69,10 @@ SYSTEM_PROMPT = """أنت مساعد قانوني مغربي محترف، خبي
 ## المحادثة
 - إذا وُجد ملخص أو رسائل سابقة، فاستعملها لفهم سياق السؤال (الضمائر، «وماذا عن...»)، لكن الأحكام دائماً من نصوص السياق الحالي.
 - أجب بالعربية الفصحى. إذا سُئلت بالفرنسية فأجب بالفرنسية مع إبقاء الاستشهادات بأسمائها العربية الرسمية.
-- عند ترجمة مقتضى قانوني إلى الفرنسية: أورد النص العربي الأصلي حرفياً بين علامتي تنصيص متبوعاً بالترجمة، واستعمل المصطلحات القانونية المغربية الرسمية (dahir، procureur du Roi، mise en demeure...). الترجمة للفهم؛ والنص العربي وحده هو الحجة."""
+- عند ترجمة مقتضى قانوني إلى الفرنسية: أورد النص العربي الأصلي حرفياً بين علامتي تنصيص متبوعاً بالترجمة، واستعمل المصطلحات القانونية المغربية الرسمية (dahir، procureur du Roi، mise en demeure...). الترجمة للفهم؛ والنص العربي وحده هو الحجة.
+
+## قاعدة اللغة (مطلقة)
+اكتب جوابك كاملاً بالعربية الفصحى، أو بالفرنسية إن كان السؤال بالفرنسية. لا تستعمل في أي جزء من الجواب أي لغة أو كتابة أخرى (الصينية، اليابانية، الكورية، الروسية...). إذا لم تجد ما تقوله، قل ذلك بالعربية."""
 
 CONDENSE_PROMPT = (
     "أنت مساعد يعيد صياغة أسئلة المتابعة. حوّل سؤال المتابعة التالي إلى سؤال "
@@ -319,12 +324,25 @@ def _stack_ready() -> bool:
         return False
 
 
+
 # ══════════════════════════════════════════════════════════════════════════
 #  Garde-fou citations : tout passage entre guillemets doit exister
 #  littéralement dans les passages servis — sinon avertissement mécanique.
 # ══════════════════════════════════════════════════════════════════════════
 _QUOTE_RE = re.compile(r"[«\"“]([^«»\"“”]{15,300})[»\"”]")
 _DIAC = re.compile(r"[ً-ٰٟـ]")
+
+# ── Garde-fou de langue ───────────────────────────────────────────────────
+# Observé en production : le modèle bascule parfois en chinois au milieu d'une
+# phrase arabe. On détecte l'écriture CJK/cyrillique et on coupe net plutôt
+# que de servir un texte illisible à un magistrat.
+_FOREIGN = re.compile("[一-鿿぀-ヿ가-힯Ѐ-ӿ]")
+_DRIFT_MSG = ("\n\n⚠️ توقّف الجواب: انحرف النموذج إلى لغة أخرى. "
+              "أعد طرح السؤال — إن تكرّر الأمر فأبلغ فريق المراجعة.")
+
+
+def _language_drift(text: str, threshold: int = 8) -> bool:
+    return len(_FOREIGN.findall(text or "")) >= threshold
 
 
 def _qnorm(s: str) -> str:
@@ -404,7 +422,10 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     except Exception as e:  # noqa: BLE001
         text = f"تعذّر توليد الإجابة (نموذج الاستدلال غير جاهز؟): {e}"
 
-    text += _quote_warning(text, hits)
+    if _language_drift(text):
+        text = _DRIFT_MSG.strip()
+    else:
+        text += _quote_warning(text, hits)
     sources = _sources(hits)
     _persist(session_id, question, text, sources)
     return {"answer": text, "sources": sources, "search_query": search_q}
