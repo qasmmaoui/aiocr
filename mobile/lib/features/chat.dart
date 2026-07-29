@@ -321,7 +321,9 @@ class _ChatScreenState extends State<ChatScreen> {
               style: m.error
                   ? tt.bodyMedium!.copyWith(color: rl.danger)
                   : tt.bodyLarge),
-        if (m.sources.isNotEmpty) ...[
+        // Les sources n'apparaissent qu'une fois la réponse écrite : afficher
+        // des références avant de savoir ce qu'elles fondent induit en erreur.
+        if (!m.streaming && m.sources.isNotEmpty) ...[
           const SizedBox(height: 10),
           Divider(height: 1, color: rl.hairline),
           const SizedBox(height: 8),
