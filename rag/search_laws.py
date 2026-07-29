@@ -12,6 +12,7 @@ if str(_ROOT) not in sys.path:
 from rag.embeddings import embed
 from rag import store
 from rag.matieres import boost_hits, collections_for
+from rag.hybrid import fuse
 
 # Corpus juridiques interrogés (ajouter les nouveaux ici : laws_civil, ...).
 COLLECTIONS = ["laws_commercial", "laws_penal"]
@@ -39,7 +40,13 @@ def search_laws(query: str, limit: int = 6, collections: list[str] | None = None
                 hits.append(h)
     hits = boost_hits(hits, matiere)
     hits.sort(key=lambda h: h.get("score", 0), reverse=True)
-    return hits[:limit]
+    # Fusion lexicale (BM25) : indispensable pour les références exactes
+    # («المادة 41-1», «2.14.652») que le vectoriel seul ne retrouve pas.
+    try:
+        hits = fuse(hits[:max(limit * 3, 12)], query, limit=limit)
+    except Exception:
+        hits = hits[:limit]
+    return hits
 
 
 if __name__ == "__main__":

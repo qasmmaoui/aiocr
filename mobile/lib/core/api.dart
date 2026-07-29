@@ -162,7 +162,12 @@ class Api {
         for (final line in lines) {
           if (line.trim().isEmpty) continue;
           final j = jsonDecode(line) as Map<String, dynamic>;
-          if (j.containsKey('sources')) {
+          if (j.containsKey('sources_final')) {
+            // liste définitive : seules les sources réellement citées
+            yield ChatEvent.sources((j['sources_final'] as List)
+                .map((s) => Source.fromJson(s as Map<String, dynamic>))
+                .toList());
+          } else if (j.containsKey('sources')) {
             yield ChatEvent.sources((j['sources'] as List)
                 .map((s) => Source.fromJson(s as Map<String, dynamic>))
                 .toList());

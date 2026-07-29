@@ -382,6 +382,52 @@ def _quote_warning(text: str, hits: list[dict]) -> str:
         return ""
 
 
+
+# ── Sources dynamiques ────────────────────────────────────────────────────
+# Deux défauts observés : (1) toujours 6 sources quelle que soit la réponse,
+# (2) des sources affichées alors que le modèle dit n'avoir rien trouvé.
+# On filtre donc en amont (pertinence) et en aval (réellement citées).
+_NOT_FOUND = ("لم أعثر", "لم أجد", "لا يوجد نص", "غير متوفر ضمن",
+              "Je n'ai pas trouvé", "aucune disposition")
+
+
+def _relevant(hits: list[dict], floor_ratio: float = 0.72) -> list[dict]:
+    """Ne garde que les passages proches du meilleur : une question à laquelle
+    un seul article répond ne doit pas traîner cinq voisins hors sujet."""
+    if not hits:
+        return []
+    best_rrf = max(h.get("rrf", 0) for h in hits)
+    best_vec = max(h.get("score", 0) for h in hits)
+    out = []
+    for h in hits:
+        keep_rrf = best_rrf and h.get("rrf", 0) >= best_rrf * floor_ratio
+        keep_vec = best_vec and h.get("score", 0) >= best_vec * 0.94
+        lexical = h.get("rank_bm25") is not None
+        if keep_rrf or keep_vec or lexical:
+            out.append(h)
+    return out or hits[:1]
+
+
+def _cited(hits: list[dict], text: str) -> list[dict]:
+    """Après génération : ne montrer que les sources réellement mobilisées.
+    Si le modèle déclare n'avoir rien trouvé, on n'affiche aucune source."""
+    if not text:
+        return []
+    low = text[:400]
+    if any(m in low for m in _NOT_FOUND) and "الفصل" not in text and "المادة" not in text:
+        return []
+    used = []
+    for h in hits:
+        art = str(h.get("article") or "").strip()
+        law = (h.get("law") or "").strip()
+        law_key = law.split("رقم")[-1].strip()[:12] if "رقم" in law else law[:14]
+        art_hit = bool(art and art != "None" and
+                       re.search(r"(?:المادة|الفصل)\s*" + re.escape(art) + r"", text))
+        law_hit = bool(law_key and len(law_key) > 4 and law_key in text)
+        if art_hit or law_hit:
+            used.append(h)
+    return used or hits          # aucune correspondance : on garde tout
+
 # ══════════════════════════════════════════════════════════════════════════
 #  API publique
 # ══════════════════════════════════════════════════════════════════════════
@@ -426,7 +472,7 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
         text = _DRIFT_MSG.strip()
     else:
         text += _quote_warning(text, hits)
-    sources = _sources(hits)
+    sources = _sources(_cited(_relevant(hits), text))
     _persist(session_id, question, text, sources)
     return {"answer": text, "sources": sources, "search_query": search_q}
 
@@ -454,7 +500,8 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
         history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
     hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
-    yield json.dumps({"sources": _sources(hits), "search_query": search_q},
+    shown = _relevant(hits)          # nombre variable selon la pertinence réelle
+    yield json.dumps({"sources": _sources(shown), "search_query": search_q},
                      ensure_ascii=False) + "\n"
 
     if not hits:
@@ -492,9 +539,15 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     except Exception as e:  # noqa: BLE001
         yield json.dumps({"delta": f"\n\n[تعذّر التوليد: {e}]"}, ensure_ascii=False) + "\n"
 
-    warn = _quote_warning("".join(full), hits)
+    answer_text = "".join(full)
+    warn = _quote_warning(answer_text, hits)
     if warn:
-        full.append(warn)
+        answer_text += warn
         yield json.dumps({"delta": warn}, ensure_ascii=False) + "\n"
-    _persist(session_id, question, "".join(full), _sources(hits))
+    # Liste DÉFINITIVE : uniquement les sources réellement mobilisées, et
+    # aucune si le modèle déclare n'avoir rien trouvé — afficher des sources
+    # inutilisées laissait croire à un ancrage qui n'existait pas.
+    final = _sources(_cited(shown, answer_text))
+    yield json.dumps({"sources_final": final}, ensure_ascii=False) + "\n"
+    _persist(session_id, question, answer_text, final)
     yield json.dumps({"done": True}) + "\n"
