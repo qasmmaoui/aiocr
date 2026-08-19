@@ -50,9 +50,12 @@ def upsert(name: str, points) -> None:
 
 
 def search(name: str, vector, limit: int = 8, flt: dict | None = None) -> list[dict]:
-    qf = None
-    if flt:
-        qf = Filter(must=[FieldCondition(key=k, match=MatchValue(value=v)) for k, v in flt.items()])
+    # Désactivation douce : un fragment mis de côté (doublon, débris trop court)
+    # reste stocké — on peut le rétablir — mais ne participe plus aux réponses.
+    conds = [FieldCondition(key="disabled", match=MatchValue(value=True))]
+    must = [FieldCondition(key=k, match=MatchValue(value=v))
+            for k, v in (flt or {}).items()]
+    qf = Filter(must=must or None, must_not=conds)
     resp = client().query_points(
         name, query=vector, limit=limit, query_filter=qf, with_payload=True
     )

@@ -26,7 +26,7 @@ if str(_ROOT) not in sys.path:
 
 import base64 as _b64
 
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
@@ -70,6 +70,10 @@ app.add_middleware(
 app.include_router(v1_router)
 # Visionneuse de preuves (page PDF + texte OCR côte à côte, lecture seule)
 app.include_router(viewer_router)
+from api.eavocat_api import router as eavocat_router  # noqa: E402
+app.include_router(eavocat_router)
+from api.viewer_v4 import router as src_v4_router  # noqa: E402
+app.include_router(src_v4_router)
 # Console d'administration du corpus (lecture seule)
 app.include_router(admin_router)
 # Boucle expert : retours, corrections, annotations + file de revue
@@ -235,6 +239,40 @@ class ChatRequest(BaseModel):
     strict: bool = False               # True = restreint réellement à la matière
 
 
+
+# ── Session implicite ────────────────────────────────────────────────────
+# L'app Flutter n'envoie pas encore  (Api.ask() accepte le
+# paramètre mais aucun appelant ne le passe), donc chaque question arrivait
+# sans historique et les questions de suivi (« les documents nécessaires ? »)
+# partaient hors contexte. Tant que l'app n'est pas reconstruite, on rattache
+# l'appel à une session stable déduite du client (jeton d'auth sinon IP).
+_AUTO_SESSIONS: dict[str, str] = {}
+_AUTO_SEEN: dict[str, float] = {}
+_AUTO_TTL = 20 * 60           # au-delà, on ouvre une nouvelle conversation
+
+
+def _auto_session(request, authorization: str | None,
+                  provided: str | None) -> str | None:
+    if provided:
+        return provided
+    import time as _t
+    key = (authorization or "").strip()
+    if not key and request is not None and request.client:
+        key = f"ip:{request.client.host}"
+    if not key:
+        return None
+    now = _t.time()
+    sid = _AUTO_SESSIONS.get(key)
+    if sid and now - _AUTO_SEEN.get(key, 0) < _AUTO_TTL:
+        _AUTO_SEEN[key] = now
+        return sid
+    chat_memory.init()
+    sid = chat_memory.create_session()
+    _AUTO_SESSIONS[key] = sid
+    _AUTO_SEEN[key] = now
+    return sid
+
+
 @app.get("/api/laws/search")
 def laws_search(q: str = Query(..., min_length=1), k: int = 6):
     """Recherche sémantique dans le corpus juridique (Qdrant + bge-m3)."""
@@ -242,13 +280,16 @@ def laws_search(q: str = Query(..., min_length=1), k: int = 6):
 
 
 @app.post("/api/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, request: Request,
+         authorization: str | None = Header(default=None)):
     """Chat juridique : réponse ancrée sur les articles récupérés + citations."""
-    return rag_answer(req.question, k=req.k, session_id=req.session_id)
+    sid = _auto_session(request, authorization, req.session_id)
+    return rag_answer(req.question, k=req.k, session_id=sid)
 
 
 @app.post("/api/chat/stream")
-def chat_stream(req: ChatRequest, authorization: str | None = Header(default=None)):
+def chat_stream(req: ChatRequest, request: Request,
+                authorization: str | None = Header(default=None)):
     """Version streaming (NDJSON) : sources d'abord, puis les tokens de la réponse.
     Avec un Bearer mobile : quota vérifié et question décomptée."""
     from api.mobile_auth import bearer_user, check_quota, count_question
@@ -256,8 +297,9 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
     if u:
         check_quota(u["username"])
         count_question(u["username"])
+    sid = _auto_session(request, authorization, req.session_id)
     return StreamingResponse(
-        rag_answer_stream(req.question, k=req.k, session_id=req.session_id,
+        rag_answer_stream(req.question, k=req.k, session_id=sid,
                           matiere=getattr(req, "matiere", None),
                           strict=bool(getattr(req, "strict", False))),
         media_type="application/x-ndjson",
@@ -266,18 +308,17 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
 @app.get("/api/matieres")
 def list_matieres():
     """Matières proposées au client, avec le nombre de textes disponibles."""
-    from rag.matieres import MATIERES
+    from rag.matieres import MATIERES, count_for
     from rag import store
-    try:
-        counts = {c.name: store.client().count(c.name).count
-                  for c in store.client().get_collections().collections}
-    except Exception:
-        counts = {}
     out = []
     for key, m in MATIERES.items():
-        n = sum(counts.get(c, 0) for c in m["collections"])
+        try:
+            n = count_for(key, store)     # compte par dossier (payload), pas par collection
+        except Exception:
+            n = 0
         out.append({"key": key, "ar": m["ar"], "fr": m["fr"], "chunks": n,
                     "disponible": n > 0})
+    out.sort(key=lambda x: -x["chunks"])   # les matières les mieux fournies d'abord
     return {"matieres": out}
 
 

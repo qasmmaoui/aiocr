@@ -15,7 +15,7 @@ from rag.matieres import boost_hits, collections_for
 from rag.hybrid import fuse
 
 # Corpus juridiques interrogés (ajouter les nouveaux ici : laws_civil, ...).
-COLLECTIONS = ["laws_commercial", "laws_penal"]
+COLLECTIONS = ["adala_laws_v4", "adala_juris_v4", "adala_pmp_v4"]
 
 
 def search_laws(query: str, limit: int = 6, collections: list[str] | None = None,

@@ -14,8 +14,10 @@ import requests
 
 from core.config import OLLAMA_BASE_URL
 from rag.search_laws import search_laws
+from rag.query_lang import search_query_for, answer_language_rule
 from rag import store
 from rag import memory
+from rag import procedures
 
 try:
     from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -97,7 +99,7 @@ def _llm(messages: list[dict], num_predict: int = 300, temperature: float = 0.1)
     r = requests.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={"model": CHAT_MODEL, "messages": messages, "stream": False,
-              "options": {"temperature": temperature, "num_ctx": 8192,
+              "options": {"temperature": temperature, "num_ctx": GEN_OPTIONS["num_ctx"],
                           "num_predict": num_predict}},
         timeout=180,
     )
@@ -242,8 +244,13 @@ def _expert_note(h: dict) -> str:
     return "".join(parts)
 
 
-def _build_context(hits: list[dict]) -> str:
+def _build_context(hits: list[dict], procs: list[dict] | None = None) -> str:
     parts = []
+    # La marche à suivre passe avant les textes : c'est la réponse à la
+    # question posée, les articles n'en sont que le fondement.
+    bloc = procedures.bloc_procedures(procs or [])
+    if bloc:
+        parts.append(bloc)
     for i, h in enumerate(hits):
         art = h.get("article")
         art_lbl = f" — رقم المادة/الفصل: {art}" if art else ""
@@ -254,18 +261,46 @@ def _build_context(hits: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def _kind_of(h: dict) -> str:
+    """'jurisprudence' pour les arrêts, 'loi' pour les textes législatifs."""
+    if (h.get("corpus") or "") == "jurisprudence":
+        return "jurisprudence"
+    if h.get("decision_no") or h.get("case_ref"):
+        return "jurisprudence"
+    return "loi"
+
+
 def _sources(hits: list[dict]) -> list[dict]:
-    return [
-        {
+    out = []
+    for h in hits:
+        kind = _kind_of(h)
+        src = {
             "law": h.get("law", ""),
             "file": h.get("file", ""),
             "article": h.get("article"),
             "chunk": h.get("chunk"),
             "score": round(float(h.get("score", 0)), 3),
             "excerpt": (h.get("text", "") or "")[:400],
+            # v4 : de quoi ouvrir la source et la surligner
+            "kind": kind,
+            "kind_ar": "اجتهاد قضائي" if kind == "jurisprudence" else "نص قانوني",
+            "kind_fr": "Jurisprudence" if kind == "jurisprudence" else "Loi",
+            "page": h.get("page"),
+            "pdf": h.get("pdf"),
+            "folder": h.get("folder"),
         }
-        for h in hits
-    ]
+        for k in ("decision_no", "decision_year", "case_ref"):
+            if h.get(k) is not None:
+                src[k] = h[k]
+        out.append(src)
+    # Regroupement lois / jurisprudence SANS re-trier par score : l'ordre reçu
+    # vient de la fusion RRF (+ ancrage des articles explicitement cités), qui
+    # est plus fiable que le score vectoriel brut — un article trouvé par BM25
+    # a un score vectoriel de 0 et serait rétrogradé à tort.
+    out.sort(key=lambda s: s["kind"] != "loi")     # tri stable
+    for i, s in enumerate(out, 1):
+        s["rank"] = i
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -276,7 +311,9 @@ def _load_session(session_id: str | None) -> tuple[list[dict], str]:
         return [], ""
     try:
         memory.init()
-        return memory.get_recent(session_id), memory.get_summary(session_id)
+        recent = memory.get_recent(session_id) or []
+        # borne dure : au-delà, le prompt gonfle et la latence double
+        return recent[-6:], memory.get_summary(session_id)
     except Exception:
         return [], ""
 
@@ -291,15 +328,17 @@ def _clean_history(history: list[dict] | None) -> list[dict]:
 
 
 def _build_messages(question: str, hits: list[dict],
-                    history: list[dict], summary: str) -> list[dict]:
-    msgs: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    history: list[dict], summary: str,
+                    procs: list[dict] | None = None) -> list[dict]:
+    msgs: list[dict] = [{"role": "system",
+                         "content": SYSTEM_PROMPT + answer_language_rule(question)}]
     if summary:
         msgs.append({"role": "system",
                      "content": f"ملخص المحادثة السابقة (للسياق فقط):\n{summary}"})
     msgs.extend(history)
     msgs.append({"role": "user", "content":
         f"السياق (نصوص قانونية من مختلف القوانين المغربية، كل مقطع مسبوق "
-        f"بوسم «المصدر»):\n{_build_context(hits)}\n\nالسؤال: {question}"})
+        f"بوسم «المصدر»):\n{_build_context(hits, procs)}\n\nالسؤال: {question}"})
     return msgs
 
 
@@ -455,8 +494,13 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     else:
         history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
+    search_q, _ar = search_query_for(search_q, _llm)
     hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
-    if not hits:
+    # L'intention se lit sur la question ET sur sa reformulation : un
+    # « et ensuite ? » ne porte le mot « مسطرة » que dans la seconde.
+    procs = (procedures.chercher(search_q)
+             if procedures.veut_une_procedure(question + " " + search_q) else [])
+    if not hits and not procs:
         return {
             "answer": "لم أعثر على نصوص قانونية ذات صلة بسؤالك في المدوّنة الحالية.",
             "sources": [], "search_query": search_q,
@@ -466,7 +510,7 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
         r = requests.post(
             f"{OLLAMA_BASE_URL}/api/chat",
             json={"model": CHAT_MODEL,
-                  "messages": _build_messages(question, hits, history, summary),
+                  "messages": _build_messages(question, hits, history, summary, procs),
                   "stream": False, "options": GEN_OPTIONS},
             timeout=600,
         )
@@ -479,7 +523,9 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
         text = _DRIFT_MSG.strip()
     else:
         text += _quote_warning(text, hits)
-    sources = _sources(_cited(_relevant(hits), text))
+    # les fiches ne subissent ni le filtre de pertinence ni celui des
+    # citations : elles n'ont ni score RRF ni numéro d'article à repérer
+    sources = procedures.sources(procs) + _sources(_cited(_relevant(hits), text))
     _persist(session_id, question, text, sources)
     return {"answer": text, "sources": sources, "search_query": search_q}
 
@@ -506,12 +552,16 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     else:
         history, summary = _load_session(session_id)
     search_q = condense_question(history, question)
+    search_q, _ar = search_query_for(search_q, _llm)
     hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
+    procs = (procedures.chercher(search_q)
+             if procedures.veut_une_procedure(question + " " + search_q) else [])
     shown = _relevant(hits)          # nombre variable selon la pertinence réelle
-    yield json.dumps({"sources": _sources(shown), "search_query": search_q},
+    yield json.dumps({"sources": procedures.sources(procs) + _sources(shown),
+                      "search_query": search_q},
                      ensure_ascii=False) + "\n"
 
-    if not hits:
+    if not hits and not procs:
         yield json.dumps(
             {"delta": "لم أعثر على نصوص قانونية ذات صلة بسؤالك في المدوّنة الحالية."},
             ensure_ascii=False,
@@ -524,7 +574,7 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
         with requests.post(
             f"{OLLAMA_BASE_URL}/api/chat",
             json={"model": CHAT_MODEL,
-                  "messages": _build_messages(question, hits, history, summary),
+                  "messages": _build_messages(question, hits, history, summary, procs),
                   "stream": True, "options": GEN_OPTIONS},
             stream=True,
             timeout=600,
@@ -554,7 +604,7 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     # Liste DÉFINITIVE : uniquement les sources réellement mobilisées, et
     # aucune si le modèle déclare n'avoir rien trouvé — afficher des sources
     # inutilisées laissait croire à un ancrage qui n'existait pas.
-    final = _sources(_cited(shown, answer_text))
+    final = procedures.sources(procs) + _sources(_cited(shown, answer_text))
     yield json.dumps({"sources_final": final}, ensure_ascii=False) + "\n"
     _persist(session_id, question, answer_text, final)
     yield json.dumps({"done": True}) + "\n"

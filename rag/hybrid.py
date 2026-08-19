@@ -114,6 +114,8 @@ def get_index() -> BM25 | None:
                 r = json.loads(line)
             except Exception:
                 continue
+            if r.get("disabled"):
+                continue     # désactivé : conservé en base, exclu de l'index
             bm.add({"collection": r.get("collection", ""), "file": r.get("file", ""),
                     "chunk": r.get("chunk"), "law": r.get("law", ""),
                     "article": r.get("article"), "text": r.get("text", ""),
@@ -131,24 +133,83 @@ _ARTREF = re.compile(r"(?:المادة|الفصل)\s*([0-9]{1,4}(?:\s*-\s*[0-9]{
 _HEADER = re.compile(r"^\s*(?:المادة|الفصل)\s*([0-9]{1,4}(?:\s*-\s*[0-9]{1,3})?)")
 
 
+def _law_hint(query: str) -> list[str]:
+    """Nom du code visé par la question, s'il est cité (« ... من مدونة الأسرة »).
+    Sans cela, « المادة 166 » ramène l'article 166 de n'importe quel texte."""
+    hints = []
+    for pat, keys in (
+        (r"مدونة\s+الأسرة", ["مدونة الأسرة"]),
+        (r"(?:القانون\s+)?الجنائي", ["القانون الجنائي", "مجموعة القانون الجنائي", "1.59.413"]),
+        (r"المسطرة\s+الجنائية", ["المسطرة الجنائية", "22.01"]),
+        (r"المسطرة\s+المدنية", ["المسطرة المدنية", "1.74.447"]),
+        (r"الالتزامات\s+والعقود", ["الالتزامات والعقود"]),
+        (r"مدونة\s+الشغل", ["مدونة الشغل", "65.99"]),
+        (r"مدونة\s+التجارة", ["مدونة التجارة", "15.95"]),
+        (r"الحقوق\s+العينية", ["الحقوق العينية", "39.08"]),
+        (r"الدستور", ["الدستور"]),
+    ):
+        if re.search(pat, query):
+            hints += keys
+    return hints
+
+
+def _art_num(v) -> str:
+    """Numéro nu d'une référence d'article (« المادة 41-1 » -> « 41-1 »)."""
+    m = _ARTREF.search(str(v or "")) or re.search(r"([0-9]{1,4}(?:\s*-\s*[0-9]{1,3})?)", str(v or ""))
+    return re.sub(r"\s+", "", m.group(1)) if m else ""
+
+
 def article_anchors(query: str, limit: int = 4) -> list[dict]:
-    """Chunks dont l'EN-TÊTE est l'article cité dans la question."""
+    """Chunks dont l'article correspond à celui cité dans la question.
+    Si la question nomme un code, ses articles passent devant : un juriste qui
+    écrit « المادة 166 من مدونة الأسرة » veut CE texte, pas l'article 166 d'un
+    autre code."""
     bm = get_index()
     if bm is None:
         return []
     wanted = {re.sub(r"\s+", "", a) for a in _ARTREF.findall(query)}
     if not wanted:
         return []
-    out = []
+    hints = _law_hint(query)
+    matched = []
     for meta in bm.docs:
-        art = str(meta.get("article") or "").strip()
-        head = _HEADER.match(meta.get("text", "") or "")
-        head_num = re.sub(r"\s+", "", head.group(1)) if head else None
-        if (art and re.sub(r"\s+", "", art) in wanted) or (head_num in wanted):
-            out.append(dict(meta))
-            if len(out) >= limit:
+        num = _art_num(meta.get("article"))
+        if not num:
+            head = _HEADER.match(meta.get("text", "") or "")
+            num = re.sub(r"\s+", "", head.group(1)) if head else ""
+        if num and num in wanted:
+            # Quand la question nomme un code, on ne retient QUE ce code pendant
+            # le parcours. Sinon la borne ci-dessous se remplissait d'articles
+            # homonymes d'autres lois et coupait avant d'atteindre le texte
+            # voulu — c'est ce qui rendait invisible un code ajouté en fin
+            # d'index, comme la المسطرة المدنية de 2026.
+            if hints:
+                blob = f"{meta.get('law','')} {meta.get('file','')}"
+                if not any(h in blob for h in hints):
+                    continue
+            matched.append(meta)
+            if len(matched) >= 400:      # borne : inutile d'explorer tout l'index
                 break
-    return out
+    if not matched:
+        return []
+    def rank(meta):
+        blob = f"{meta.get('law','')} {meta.get('file','')}"
+        hit = any(h in blob for h in hints) if hints else False
+        # Un texte abrogé ne passe jamais devant le texte en vigueur : deux
+        # codes portent le même nom (المسطرة المدنية 1974 et 2026) et l'ancien
+        # gagnait au seul critère de longueur.
+        abroge = meta.get("status", "current") == "possibly_abrogated"
+        return (1 if abroge else 0, 0 if hit else 1,
+                -len(meta.get("text", "") or ""))
+    matched.sort(key=rank)
+    # si un code est nommé, ne garder que ses articles quand il y en a
+    if hints:
+        strict = [m for m in matched
+                  if any(h in f"{m.get('law','')} {m.get('file','')}" for h in hints)]
+        if strict:
+            matched = strict
+    return [dict(m) for m in matched[:limit]]
+
 
 def _key(h: dict) -> tuple:
     return (h.get("collection", ""), h.get("file", ""), str(h.get("chunk")))
