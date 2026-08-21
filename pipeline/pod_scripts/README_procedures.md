@@ -28,3 +28,37 @@ Vérification :
 
 Retour arrière : mv data/laws_corpus_v2.jsonl.bak-procedures data/laws_corpus_v2.jsonl
                  puis client.delete_collection("adala_procedures")
+
+---
+
+# Séquence pod — pièces jointes
+
+Trois fichiers à téléverser :
+  services/attachments.py       -> /workspace/aiocr/services/
+  tests/test_attachments.py     -> /workspace/aiocr/tests/
+  pipeline/pod_scripts/wire_pieces.py + wire_api_pieces.py  -> /workspace/
+
+Puis :
+
+  cd /workspace
+  /workspace/venv/bin/python aiocr/tests/test_attachments.py   # 10 épreuves
+  /workspace/venv/bin/python wire_pieces.py        # rag/answer.py
+  /workspace/venv/bin/python wire_api_pieces.py    # api/main.py
+  setsid bash /workspace/restart_api2.sh </dev/null >/workspace/restart2.log 2>&1 &
+
+Vérification :
+  curl -F "file=@convocation.pdf" localhost:8000/api/attachments   -> {id, nb_pages}
+  puis POST /api/chat/stream avec {"question": "...", "attachment_ids": ["<id>"]}
+  une image .jpg doit passer aussi (page unique, OCR vision)
+  après 5 min d'inactivité : le fichier sous data/pieces disparaît,
+  mais une question de suivi doit toujours trouver le texte
+
+Retour arrière : les deux scripts déposent answer.py.bak-pieces et
+main.py.bak-pieces à côté des originaux.
+
+À faire dans la même session (indépendant) :
+  - reprendre la sauvegarde : 17 023 fichiers de jurisprudence manquants,
+    rework/input/extracted (4 208), juris_y — PAR LOTS avec comptage,
+    et sans rediriger stderr de tar (c'est ce masquage qui a caché la coupure)
+  - comparer rework/input/laws_all à Y:\adala-project\adala_pdfs PAR EMPREINTE,
+    pas par nombre de fichiers
