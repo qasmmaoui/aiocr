@@ -91,20 +91,54 @@ async def joindre_piece(request: Request,
 
     if est_pdf:
         res = extract_pdf(contenu)
-        pages, doc_type = res["pages"], res["doc_type"]
-        if res["n_scan"] > 0:
-            run_ocr_on_pages(pages)
+        # Un document long n'est pas une pièce jointe à une question : le
+        # transcrire mobiliserait le modèle de vision plus d'une heure, pour
+        # une réponse que personne n'attendra. On refuse tout de suite plutôt
+        # que de lancer un travail invisible et facturé.
+        if res["nb_pages"] > attachments.MAX_PAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Document trop long : {res['nb_pages']} pages "
+                       f"(maximum {attachments.MAX_PAGES}).")
+        pages, doc_type, a_ocr = res["pages"], res["doc_type"], res["n_scan"] > 0
     else:
         # L'OCR travaille sur du base64 (`image_b64`), pas sur des octets :
         # une image devient donc une page scannée unique, décodée par PIL en
         # aval — JPEG, PNG, WEBP ou TIFF passent tels quels.
         pages = [{"num": 1, "type": "scan", "text": "",
                   "image_b64": _b64.b64encode(contenu).decode()}]
-        run_ocr_on_pages(pages)
-        doc_type = "scan"
+        doc_type, a_ocr = "scan", True
 
     mime = "application/pdf" if est_pdf else "image"
-    return attachments.enregistrer(sid, nom, mime, contenu, pages, doc_type)
+
+    if not a_ocr:
+        # PDF avec couche texte : l'extraction est immédiate, rien à différer.
+        return attachments.enregistrer(sid, nom, mime, contenu, pages, doc_type)
+
+    # Document scanné : le modèle de vision met de trente à quatre-vingt-dix
+    # secondes par page. Attendre la fin ferait couper la connexion par
+    # Cloudflare bien avant. On enregistre la pièce en l'état, on rend la main,
+    # et la transcription se poursuit dans un fil séparé.
+    fiche = attachments.enregistrer(sid, nom, mime, contenu, pages, doc_type,
+                                    etat="lecture")
+
+    def _lire():
+        def avancement(ratio: float, _message: str = "") -> None:
+            # Lève `Abandonnee` si la pièce a disparu : l'exception remonte à
+            # travers l'OCR et arrête la transcription entre deux pages.
+            attachments.maj_progres(fiche["id"], round(ratio * 100))
+
+        try:
+            run_ocr_on_pages(pages, progress_callback=avancement)
+            attachments.marquer_lu(fiche["id"], pages, doc_type)
+        except attachments.Abandonnee:
+            pass                                 # retirée par l'utilisateur
+        except Exception:                        # noqa: BLE001
+            attachments.marquer_echec(fiche["id"])
+
+    import threading
+    threading.Thread(target=_lire, daemon=True).start()
+    return fiche
 
 
 @app.get("/api/attachments")

@@ -11,6 +11,9 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   shared_preferences: ^2.3.0
+  # Sélecteur de fichiers pour les pièces jointes : fonctionne sur le web
+  # comme sur Android, contrairement à un input HTML propre au navigateur.
+  file_picker: ^8.1.2
 
 dev_dependencies:
   flutter_test:

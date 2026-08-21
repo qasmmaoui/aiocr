@@ -16,6 +16,33 @@ class Source {
         chunk = j['chunk'];
 }
 
+/// Pièce jointe à une conversation. Le serveur n'en renvoie que de quoi
+/// afficher une carte — nom, nombre de pages, nature — jamais l'image des
+/// pages : le fichier est effacé après cinq minutes d'inactivité, en garder
+/// une reproduction lisible viderait la règle de son sens.
+class Piece {
+  final String id, filename, docType;
+  final int nbPages;
+  /// « pret », « lecture » (transcription en cours) ou « echec ».
+  String etat;
+  /// Avancement de la transcription, de 0 à 100.
+  int progres;
+  Piece.fromJson(Map<String, dynamic> j)
+      : id = (j['id'] ?? '') as String,
+        filename = (j['filename'] ?? '') as String,
+        docType = (j['doc_type'] ?? '') as String,
+        nbPages = (j['nb_pages'] ?? 0) as int,
+        etat = (j['etat'] ?? 'pret') as String,
+        progres = (j['progres'] ?? 0) as int;
+}
+
+class PieceError implements Exception {
+  final String message;
+  PieceError(this.message);
+  @override
+  String toString() => message;
+}
+
 class Usage {
   final String plan;
   final int used;
@@ -131,9 +158,77 @@ class Api {
     }
   }
 
+  /// Joint UN document à la conversation, et rend sa fiche une fois lu.
+  ///
+  /// Un envoi par fichier : chaque requête reste courte, donc le délai de
+  /// 100 s imposé par Cloudflare devant le proxy ne peut mordre que sur un
+  /// document isolé. L'océrisation se fait pendant que l'utilisateur tape.
+  /// Envois en cours, pour pouvoir les interrompre : fermer le client coupe
+  /// la requête là où elle en est.
+  final Map<String, http.Client> _envois = {};
+
+  void annulerEnvoi(String cle) {
+    _envois.remove(cle)?.close();
+  }
+
+  Future<Piece> joindre(String sessionId, String nom, List<int> octets,
+      {String? cle}) async {
+    final req = http.MultipartRequest(
+        'POST', Uri.parse('$base/api/attachments?session_id=$sessionId'))
+      ..headers.addAll(await _auth())
+      ..files.add(http.MultipartFile.fromBytes('file', octets, filename: nom));
+    final client = http.Client();
+    if (cle != null) _envois[cle] = client;
+    late http.Response resp;
+    try {
+      resp = await http.Response.fromStream(await client.send(req));
+    } finally {
+      if (cle != null && _envois[cle] == client) _envois.remove(cle);
+      client.close();
+    }
+    if (resp.statusCode == 401 && await refreshTokens()) {
+      return joindre(sessionId, nom, octets, cle: cle);
+    }
+    if (resp.statusCode != 200) {
+      String detail = '';
+      try {
+        detail = (jsonDecode(utf8.decode(resp.bodyBytes))
+            as Map<String, dynamic>)['detail']?.toString() ?? '';
+      } catch (_) {}
+      throw PieceError(detail.isEmpty ? 'Échec de l\'envoi' : detail);
+    }
+    return Piece.fromJson(
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>);
+  }
+
+  /// État des pièces d'une conversation — sert à savoir quand une
+  /// transcription en arrière-plan est terminée.
+  Future<List<Piece>> etatPieces(String sessionId) async {
+    try {
+      final r = await http.get(
+          Uri.parse('$base/api/attachments?session_id=$sessionId'),
+          headers: await _auth());
+      if (r.statusCode != 200) return [];
+      final j = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      return ((j['pieces'] ?? []) as List)
+          .map((e) => Piece.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Retrait d'une pièce — avant l'envoi de la question, ou après coup.
+  Future<void> retirerPiece(String sessionId, String id) async {
+    await http.delete(
+        Uri.parse('$base/api/attachments/$id?session_id=$sessionId'),
+        headers: await _auth());
+  }
+
   /// Chat en streaming NDJSON : émet d'abord les sources, puis les deltas.
   Stream<ChatEvent> ask(String question,
-      {String? sessionId, String? matiere}) async* {
+      {String? sessionId, String? matiere,
+      List<String> attachmentIds = const []}) async* {
     var attempt = 0;
     while (true) {
       final req = http.Request('POST', Uri.parse('$base/api/chat/stream'))
@@ -146,6 +241,7 @@ class Api {
           'k': 6,
           if (sessionId != null) 'session_id': sessionId,
           if (matiere != null && matiere != 'all') 'matiere': matiere,
+          if (attachmentIds.isNotEmpty) 'attachment_ids': attachmentIds,
         });
       final resp = await http.Client().send(req);
       if (resp.statusCode == 401 && attempt == 0 && await refreshTokens()) {

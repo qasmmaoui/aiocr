@@ -24,3 +24,13 @@ Thumbs.db
 
 # livrables volumineux (APK) — distribués hors dépôt
 dist/*.apk
+
+# Reliquats de mise au point : git tient l'historique, ces copies ne servent
+# qu'à égarer le lecteur sur la version qui fait foi.
+*.bak
+*.bak-*
+*_backup.py
+*_backup_*.py
+*_v2_backup.py
+*_prelawboost.py
+*_prelang.py

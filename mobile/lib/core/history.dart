@@ -1,6 +1,7 @@
 // Historique des conversations : sauvegarde locale complète (questions,
 // réponses, sources) pour rouvrir une discussion et la poursuivre.
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -92,8 +93,18 @@ class History {
     await p.setString(_key, jsonEncode(list.map((x) => x.toJson()).toList()));
   }
 
-  static String newId() =>
-      DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+  static final _alea = Random.secure();
+
+  /// Identifiant de conversation — tiré au hasard, pas dérivé de l'heure.
+  ///
+  /// C'était l'horodatage en microsecondes : une valeur énumérable. Or le
+  /// serveur accepte tel quel l'identifiant qu'on lui donne, et une
+  /// conversation porte la mémoire du dossier et le texte des pièces jointes.
+  /// Deviner un identifiant, c'est lire le dossier d'un confrère.
+  static String newId() {
+    final o = List<int>.generate(16, (_) => _alea.nextInt(256));
+    return o.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
 
   /// Titre = début de la première question, tronqué proprement.
   static String titleFrom(String firstQuestion) {

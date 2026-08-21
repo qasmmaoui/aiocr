@@ -30,6 +30,10 @@ INACTIVITE = 5 * 60
 # noieraient la question et déborderaient la fenêtre de contexte.
 MAX_CAR_PIECE = 12_000
 MAX_PIECES = 10
+# Au-delà, ce n'est plus une pièce jointe à une question mais un fonds
+# documentaire : à trois minutes la page pour un scan, trente pages font déjà
+# une heure et demie de transcription.
+MAX_PAGES = 30
 
 _DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "pieces")
 
@@ -50,14 +54,29 @@ def init() -> None:
             " nb_pages INTEGER DEFAULT 0, doc_type TEXT DEFAULT '',"
             " pages TEXT DEFAULT '[]', chemin TEXT DEFAULT '',"
             " fichier_supprime INTEGER DEFAULT 0,"
+            " etat TEXT DEFAULT 'pret', progres INTEGER DEFAULT 0,"
             " created_at REAL)")
         cx.execute("CREATE INDEX IF NOT EXISTS ix_att_session"
                    " ON attachments(session_id)")
+        # Table créée avant l'ajout de la lecture différée : on la complète.
+        for colonne, definition in (("etat", "TEXT DEFAULT 'pret'"),
+                                    ("progres", "INTEGER DEFAULT 0")):
+            try:
+                cx.execute(f"ALTER TABLE attachments ADD COLUMN {colonne}"
+                           f" {definition}")
+            except sqlite3.OperationalError:
+                pass
 
 
 def enregistrer(session_id: str, filename: str, mime: str, contenu: bytes,
-                pages: list[dict], doc_type: str) -> dict:
-    """Range une pièce et ne conserve du texte que ce qui sert à répondre."""
+                pages: list[dict], doc_type: str, etat: str = "pret") -> dict:
+    """Range une pièce et ne conserve du texte que ce qui sert à répondre.
+
+    `etat` vaut « lecture » quand le document est un scan : sa transcription
+    par le modèle de vision prend de trente à quatre-vingt-dix secondes par
+    page, bien au-delà du délai que Cloudflare accorde à une requête. On rend
+    donc la main aussitôt et la lecture se poursuit en arrière-plan.
+    """
     init()
     aid = uuid.uuid4().hex
     # nom opaque : le nom d'origine reste une donnée, jamais un chemin
@@ -71,23 +90,71 @@ def enregistrer(session_id: str, filename: str, mime: str, contenu: bytes,
     with _cx() as cx:
         cx.execute(
             "INSERT INTO attachments(id, session_id, filename, mime, nb_pages,"
-            " doc_type, pages, chemin, fichier_supprime, created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,0,?)",
+            " doc_type, pages, chemin, fichier_supprime, etat, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,0,?,?)",
             (aid, session_id, filename, mime, len(pages), doc_type,
-             json.dumps(maigres, ensure_ascii=False), chemin, time.time()))
+             json.dumps(maigres, ensure_ascii=False), chemin, etat,
+             time.time()))
     return {"id": aid, "filename": filename, "nb_pages": len(pages),
-            "doc_type": doc_type, "etat": "pret"}
+            "doc_type": doc_type, "etat": etat}
+
+
+class Abandonnee(Exception):
+    """La pièce a disparu en cours de lecture : l'utilisateur a renoncé.
+
+    Levée depuis le rapport d'avancement, elle remonte à travers l'OCR et
+    interrompt la transcription page par page — sans quoi le modèle
+    continuerait à travailler pour une pièce que plus personne n'attend.
+    """
+
+
+def maj_progres(attachment_id: str, pourcent: int) -> None:
+    """Publie l'avancement, et signale l'abandon si la pièce n'existe plus."""
+    init()
+    with _cx() as cx:
+        n = cx.execute(
+            "UPDATE attachments SET progres = ? WHERE id = ? AND etat = 'lecture'",
+            (max(0, min(100, int(pourcent))), attachment_id)).rowcount
+    if not n:
+        raise Abandonnee(attachment_id)
+
+
+def marquer_lu(attachment_id: str, pages: list[dict], doc_type: str = "") -> None:
+    """La lecture en arrière-plan est terminée : on range le texte obtenu."""
+    init()
+    maigres = [{"num": p["num"], "type": p.get("type", ""),
+                "text": p.get("text", "")} for p in pages]
+    with _cx() as cx:
+        cx.execute(
+            "UPDATE attachments SET pages = ?, nb_pages = ?, etat = 'pret',"
+            " progres = 100"
+            + (", doc_type = ?" if doc_type else "")
+            + " WHERE id = ?",
+            ((json.dumps(maigres, ensure_ascii=False), len(pages), doc_type,
+              attachment_id) if doc_type else
+             (json.dumps(maigres, ensure_ascii=False), len(pages),
+              attachment_id)))
+
+
+def marquer_echec(attachment_id: str) -> None:
+    """La lecture a échoué : la pièce reste visible, mais signalée."""
+    init()
+    with _cx() as cx:
+        cx.execute("UPDATE attachments SET etat = 'echec' WHERE id = ?",
+                   (attachment_id,))
 
 
 def lister(session_id: str) -> list[dict]:
     init()
     with _cx() as cx:
         rows = cx.execute(
-            "SELECT id, filename, nb_pages, doc_type, fichier_supprime"
-            " FROM attachments WHERE session_id = ? ORDER BY created_at",
+            "SELECT id, filename, nb_pages, doc_type, fichier_supprime, etat,"
+            " progres FROM attachments WHERE session_id = ? ORDER BY created_at",
             (session_id,)).fetchall()
     return [{"id": r[0], "filename": r[1], "nb_pages": r[2], "doc_type": r[3],
-             "fichier_disponible": not r[4]} for r in rows]
+             "fichier_disponible": not r[4], "etat": r[5] or "pret",
+             "progres": r[6] or 0}
+            for r in rows]
 
 
 def pour_contexte(session_id: str, ids: list[str]) -> list[dict]:

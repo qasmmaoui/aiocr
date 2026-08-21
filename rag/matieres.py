@@ -173,10 +173,20 @@ def boost_hits(hits: list[dict], matiere: str | None) -> list[dict]:
     for h in hits:
         s = h.get("score", 0) or 0
         if has_matiere:
-            inside = h.get("folder") in folders
-            h["hors_matiere"] = not inside
-            if inside:
+            folder = h.get("folder")
+            if not folder:
+                # Dossier inconnu n'est pas dossier étranger. Deux tiers du
+                # corpus lexical n'ont pas de matière renseignée, et toutes les
+                # lignes venues de BM25 en sont dépourvues — ce sont pourtant
+                # celles qui portent les numéros d'articles exacts. Les traiter
+                # comme hors sujet revenait à faire taire les résultats les
+                # plus précis dès qu'une matière était choisie.
+                h["hors_matiere"] = False
+            elif folder in folders:
+                h["hors_matiere"] = False
                 s *= BOOST
+            else:
+                h["hors_matiere"] = True
         s *= _doc_boost(h)
         if h.get("ocr_flagged"):
             s *= 0.85

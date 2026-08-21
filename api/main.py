@@ -48,6 +48,7 @@ from pydantic import BaseModel
 from rag.search_laws import search_laws
 from rag.answer import answer as rag_answer, answer_stream as rag_answer_stream
 from rag import memory as chat_memory
+from services import attachments
 from api.openai_compat import router as v1_router
 from api.viewer import router as viewer_router
 from api.admin import router as admin_router
@@ -161,8 +162,26 @@ def download_pdf(filename: str):
 
 
 @app.post("/api/upload")
-async def upload_document(file: UploadFile = File(...)):
-    """Upload un PDF, extrait le texte et l'indexe."""
+async def upload_document(file: UploadFile = File(...),
+                          authorization: str | None = Header(default=None)):
+    """Verse un PDF au FONDS DOCUMENTAIRE, consultable par tous.
+
+    À ne pas confondre avec `/api/attachments`, qui reçoit les pièces d'un
+    dossier client : celles-là restent cloisonnées dans leur conversation et
+    n'entrent jamais dans l'index de recherche.
+
+    Cette route-ci indexe pour de bon. Elle était ouverte : n'importe qui
+    pouvait y verser un document, et le rendre consultable par tous les
+    utilisateurs via `/api/search`. Elle est désormais réservée aux
+    administrateurs.
+    """
+    from api.mobile_auth import bearer_user
+    u = bearer_user(authorization)
+    if not u or (u.get("role") or "") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Réservé aux administrateurs. Pour joindre une pièce à une "
+                   "conversation, utilisez /api/attachments.")
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
 
@@ -237,6 +256,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None      # mémoire de conversation (optionnelle)
     matiere: str | None = None         # domaine priorisé (penal, commercial…)
     strict: bool = False               # True = restreint réellement à la matière
+    attachment_ids: list[str] = []     # pièces jointes à la question
 
 
 
@@ -284,7 +304,8 @@ def chat(req: ChatRequest, request: Request,
          authorization: str | None = Header(default=None)):
     """Chat juridique : réponse ancrée sur les articles récupérés + citations."""
     sid = _auto_session(request, authorization, req.session_id)
-    return rag_answer(req.question, k=req.k, session_id=sid)
+    return rag_answer(req.question, k=req.k, session_id=sid,
+                      attachment_ids=req.attachment_ids)
 
 
 @app.post("/api/chat/stream")
@@ -301,7 +322,8 @@ def chat_stream(req: ChatRequest, request: Request,
     return StreamingResponse(
         rag_answer_stream(req.question, k=req.k, session_id=sid,
                           matiere=getattr(req, "matiere", None),
-                          strict=bool(getattr(req, "strict", False))),
+                          strict=bool(getattr(req, "strict", False)),
+                          attachment_ids=req.attachment_ids),
         media_type="application/x-ndjson",
     )
 
@@ -344,6 +366,7 @@ def session_messages(session_id: str):
 @app.delete("/api/sessions/{session_id}")
 def delete_session(session_id: str):
     chat_memory.init()
+    attachments.oublier_session(session_id)
     chat_memory.delete_session(session_id)
     return {"deleted": session_id}
 
@@ -353,3 +376,133 @@ if __name__ == "__main__":
     import uvicorn
     from core.config import API_HOST, API_PORT
     uvicorn.run("api.main:app", host=API_HOST, port=API_PORT, reload=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Pièces jointes d'une conversation
+# ══════════════════════════════════════════════════════════════════════════
+IMAGES_ACCEPTEES = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
+
+
+@app.post("/api/attachments")
+async def joindre_piece(request: Request,
+                        file: UploadFile = File(...),
+                        session_id: str | None = None,
+                        authorization: str | None = Header(default=None)):
+    """Reçoit UN document et en extrait le texte, sans l'indexer.
+
+    Une image est traitée comme une page unique scannée : c'est le cas le plus
+    fréquent en pratique, la photo d'une convocation prise au téléphone.
+    """
+    sid = _auto_session(request, authorization, session_id)
+    if not sid:
+        raise HTTPException(status_code=400,
+                            detail="Aucune conversation pour rattacher la pièce.")
+
+    deja = [a for a in attachments.lister(sid)]
+    if len(deja) >= attachments.MAX_PIECES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {attachments.MAX_PIECES} pièces par conversation.")
+
+    nom = file.filename or "document"
+    bas = nom.lower()
+    est_pdf = bas.endswith(".pdf")
+    est_image = any(bas.endswith(e) for e in IMAGES_ACCEPTEES)
+    if not (est_pdf or est_image):
+        raise HTTPException(status_code=400,
+                            detail="Formats acceptés : PDF, JPG, PNG, WEBP, TIFF, BMP.")
+
+    contenu = await file.read()
+    if not contenu:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+
+    if est_pdf:
+        res = extract_pdf(contenu)
+        # Un document long n'est pas une pièce jointe à une question : le
+        # transcrire mobiliserait le modèle de vision plus d'une heure, pour
+        # une réponse que personne n'attendra. On refuse tout de suite plutôt
+        # que de lancer un travail invisible et facturé.
+        if res["nb_pages"] > attachments.MAX_PAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Document trop long : {res['nb_pages']} pages "
+                       f"(maximum {attachments.MAX_PAGES}).")
+        pages, doc_type, a_ocr = res["pages"], res["doc_type"], res["n_scan"] > 0
+    else:
+        # L'OCR travaille sur du base64 (`image_b64`), pas sur des octets :
+        # une image devient donc une page scannée unique, décodée par PIL en
+        # aval — JPEG, PNG, WEBP ou TIFF passent tels quels.
+        pages = [{"num": 1, "type": "scan", "text": "",
+                  "image_b64": _b64.b64encode(contenu).decode()}]
+        doc_type, a_ocr = "scan", True
+
+    mime = "application/pdf" if est_pdf else "image"
+
+    if not a_ocr:
+        # PDF avec couche texte : l'extraction est immédiate, rien à différer.
+        return attachments.enregistrer(sid, nom, mime, contenu, pages, doc_type)
+
+    # Document scanné : le modèle de vision met de trente à quatre-vingt-dix
+    # secondes par page. Attendre la fin ferait couper la connexion par
+    # Cloudflare bien avant. On enregistre la pièce en l'état, on rend la main,
+    # et la transcription se poursuit dans un fil séparé.
+    fiche = attachments.enregistrer(sid, nom, mime, contenu, pages, doc_type,
+                                    etat="lecture")
+
+    def _lire():
+        def avancement(ratio: float, _message: str = "") -> None:
+            # Lève `Abandonnee` si la pièce a disparu : l'exception remonte à
+            # travers l'OCR et arrête la transcription entre deux pages.
+            attachments.maj_progres(fiche["id"], round(ratio * 100))
+
+        try:
+            run_ocr_on_pages(pages, progress_callback=avancement)
+            attachments.marquer_lu(fiche["id"], pages, doc_type)
+        except attachments.Abandonnee:
+            pass                                 # retirée par l'utilisateur
+        except Exception:                        # noqa: BLE001
+            attachments.marquer_echec(fiche["id"])
+
+    import threading
+    threading.Thread(target=_lire, daemon=True).start()
+    return fiche
+
+
+@app.get("/api/attachments")
+def lister_pieces(request: Request, session_id: str | None = None,
+                  authorization: str | None = Header(default=None)):
+    sid = _auto_session(request, authorization, session_id)
+    return {"session_id": sid, "pieces": attachments.lister(sid) if sid else []}
+
+
+@app.delete("/api/attachments/{attachment_id}")
+def retirer_piece(attachment_id: str, request: Request,
+                  session_id: str | None = None,
+                  authorization: str | None = Header(default=None)):
+    """Retrait par l'utilisateur — avant l'envoi, ou après coup."""
+    sid = _auto_session(request, authorization, session_id)
+    if not sid or not attachments.supprimer(attachment_id, sid):
+        raise HTTPException(status_code=404, detail="Pièce introuvable.")
+    return {"ok": True}
+
+
+@app.on_event("startup")
+async def _balayeur_pieces():
+    """Efface les fichiers des conversations en sommeil depuis cinq minutes.
+
+    Le texte extrait, lui, reste tant que la conversation existe : une
+    question de suivi doit rester possible une heure après l'envoi. C'est le
+    document original qui ne doit pas s'attarder sur le disque.
+    """
+    import asyncio
+
+    async def boucle():
+        while True:
+            try:
+                attachments.purger()
+            except Exception:            # noqa: BLE001 — jamais fatal au service
+                pass
+            await asyncio.sleep(60)
+
+    asyncio.create_task(boucle())

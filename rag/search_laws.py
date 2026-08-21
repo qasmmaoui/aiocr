@@ -17,6 +17,13 @@ from rag.hybrid import fuse
 # Corpus juridiques interrogés (ajouter les nouveaux ici : laws_civil, ...).
 COLLECTIONS = ["adala_laws_v4", "adala_juris_v4", "adala_pmp_v4"]
 
+# Combien de candidats puiser par collection avant pondération et fusion.
+# Rien à voir avec le nombre de résultats rendus : c'est la marge de manœuvre
+# laissée au classement. Trop étroite, aucun bonus ne peut rattraper un bon
+# article mal placé par la similarité brute.
+PROFONDEUR_FACTEUR = 8
+PROFONDEUR_MIN = 50
+
 
 def search_laws(query: str, limit: int = 6, collections: list[str] | None = None,
                 matiere: str | None = None, strict: bool = False) -> list[dict]:
@@ -32,10 +39,23 @@ def search_laws(query: str, limit: int = 6, collections: list[str] | None = None
             available = None
         collections = collections_for(matiere, strict=strict, available=available)
     qvec = embed(query)
+    # Profondeur de puisage, distincte du nombre de résultats rendus.
+    #
+    # On ramenait `limit` (6) résultats par collection AVANT toute pondération.
+    # Or `adala_laws_v4` compte plus de cent mille points : un article devait
+    # figurer dans le tout premier peloton par similarité brute pour avoir la
+    # moindre chance d'être vu, et aucun bonus de matière ou d'ancrage ne
+    # pouvait le rattraper ensuite. C'est ainsi que la المادة 204 du nouveau
+    # code de procédure civile — qui énonce l'unique délai d'appel de trente
+    # jours — restait invisible, et que le moteur répondait « aucun texte
+    # trouvé » sur une question dont la réponse était dans le corpus.
+    #
+    # On puise donc large et on laisse la pondération puis la fusion trancher.
+    profondeur = max(limit * PROFONDEUR_FACTEUR, PROFONDEUR_MIN)
     hits: list[dict] = []
     for col in (collections or COLLECTIONS):
         if store.exists(col):
-            for h in store.search(col, qvec, limit=limit):
+            for h in store.search(col, qvec, limit=profondeur):
                 h["collection"] = col
                 hits.append(h)
     hits = boost_hits(hits, matiere)
@@ -43,7 +63,7 @@ def search_laws(query: str, limit: int = 6, collections: list[str] | None = None
     # Fusion lexicale (BM25) : indispensable pour les références exactes
     # («المادة 41-1», «2.14.652») que le vectoriel seul ne retrouve pas.
     try:
-        hits = fuse(hits[:max(limit * 3, 12)], query, limit=limit)
+        hits = fuse(hits[:profondeur], query, limit=limit)
     except Exception:
         hits = hits[:limit]
     return hits

@@ -18,6 +18,7 @@ from rag.query_lang import search_query_for, answer_language_rule
 from rag import store
 from rag import memory
 from rag import procedures
+from services import attachments
 
 try:
     from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -244,10 +245,16 @@ def _expert_note(h: dict) -> str:
     return "".join(parts)
 
 
-def _build_context(hits: list[dict], procs: list[dict] | None = None) -> str:
+def _build_context(hits: list[dict], procs: list[dict] | None = None,
+                   pieces: list[dict] | None = None) -> str:
     parts = []
     # La marche à suivre passe avant les textes : c'est la réponse à la
     # question posée, les articles n'en sont que le fondement.
+    # Les pièces du dossier viennent en premier : elles portent les faits
+    # sur lesquels la question se pose, les textes n'arrivent qu'ensuite.
+    bloc_p = attachments.bloc_pieces(pieces or [])
+    if bloc_p:
+        parts.append(bloc_p)
     bloc = procedures.bloc_procedures(procs or [])
     if bloc:
         parts.append(bloc)
@@ -329,7 +336,8 @@ def _clean_history(history: list[dict] | None) -> list[dict]:
 
 def _build_messages(question: str, hits: list[dict],
                     history: list[dict], summary: str,
-                    procs: list[dict] | None = None) -> list[dict]:
+                    procs: list[dict] | None = None,
+                    pieces: list[dict] | None = None) -> list[dict]:
     msgs: list[dict] = [{"role": "system",
                          "content": SYSTEM_PROMPT + answer_language_rule(question)}]
     if summary:
@@ -338,7 +346,7 @@ def _build_messages(question: str, hits: list[dict],
     msgs.extend(history)
     msgs.append({"role": "user", "content":
         f"السياق (نصوص قانونية من مختلف القوانين المغربية، كل مقطع مسبوق "
-        f"بوسم «المصدر»):\n{_build_context(hits, procs)}\n\nالسؤال: {question}"})
+        f"بوسم «المصدر»):\n{_build_context(hits, procs, pieces)}\n\nالسؤال: {question}"})
     return msgs
 
 
@@ -396,6 +404,47 @@ def _qnorm(s: str) -> str:
     s = (s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
            .replace("ى", "ي").replace("ة", "ه"))
     return re.sub(r"[^؀-ۿ0-9]", "", s)
+
+
+def _bandeau_version(hits: list[dict], text: str) -> str:
+    """Bandeau d'abrogation imposé, indépendamment de l'obéissance du modèle.
+
+    `_version_note` dépose déjà l'avertissement dans le contexte et le prompt
+    système ordonne de le relayer « حرفياً ». Mesuré : le modèle ne le fait pas
+    toujours. Un article du code de procédure civile de 1974 a été servi comme
+    droit en vigueur, sans mention de son abrogation par la loi 58.25 — alors
+    que la note figurait bien dans le contexte envoyé.
+
+    Sur des délais de recours, une omission pareille se paie par une forclusion.
+    On ne demande donc plus : on préfixe. Le bandeau n'est posé que si le texte
+    abrogé a réellement servi, et pas si le modèle l'a déjà signalé lui-même.
+    """
+    abroges: dict[str, list[str]] = {}
+    for h in hits:
+        v = _version_info(h)
+        if not v or v.get("status") != "possibly_abrogated":
+            continue
+        art = str(h.get("article") or "").strip()
+        # l'article doit apparaître dans la réponse : un passage récupéré mais
+        # non mobilisé n'a pas à déclencher d'alarme
+        if art and art not in ("None", "") and art not in text:
+            continue
+        loi = (h.get("law") or "").strip()[:70]
+        abroges.setdefault(loi, [])
+        if art and art not in abroges[loi]:
+            abroges[loi].append(art)
+    if not abroges:
+        return ""
+    if "نُسخ" in text or "منسوخ" in text or "ألغي" in text:
+        return ""                      # le modèle a déjà prévenu
+    lignes = []
+    for loi, arts in abroges.items():
+        refs = "، ".join(a for a in arts[:6] if a)
+        lignes.append(f"«{loi}»" + (f" ({refs})" if refs else ""))
+    return ("⚠️ [تحذير إلزامي] استند هذا الجواب إلى نص ورد ما يفيد نسخه أو "
+            "إلغاءه: " + " ؛ ".join(lignes) +
+            ". تحقق وجوبا من النص الناسخ ومن النظام المطبّق على ملفك قبل "
+            "الاعتماد على ما سبق.\n\n")
 
 
 def _quote_warning(text: str, hits: list[dict]) -> str:
@@ -479,7 +528,8 @@ def _cited(hits: list[dict], text: str) -> list[dict]:
 # ══════════════════════════════════════════════════════════════════════════
 def answer(question: str, k: int = 6, session_id: str | None = None,
            history: list[dict] | None = None, matiere: str | None = None,
-           strict: bool = False) -> dict:
+           strict: bool = False,
+           attachment_ids: list[str] | None = None) -> dict:
     """`history` explicite (mode OpenAI, sans état) court-circuite la session
     interne : pas de lecture ni de persistance mémoire."""
     question = (question or "").strip()
@@ -498,9 +548,13 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
     # L'intention se lit sur la question ET sur sa reformulation : un
     # « et ensuite ? » ne porte le mot « مسطرة » que dans la seconde.
+    # Les pièces sont désignées par l'utilisateur, jamais devinées ; elles
+    # restent bornées à leur session (un identifiant deviné n'ouvre rien).
+    pieces = attachments.pour_contexte(session_id, attachment_ids or []) \
+        if (session_id and attachment_ids) else []
     procs = (procedures.chercher(search_q)
              if procedures.veut_une_procedure(question + " " + search_q) else [])
-    if not hits and not procs:
+    if not hits and not procs and not pieces:
         return {
             "answer": "لم أعثر على نصوص قانونية ذات صلة بسؤالك في المدوّنة الحالية.",
             "sources": [], "search_query": search_q,
@@ -510,7 +564,8 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
         r = requests.post(
             f"{OLLAMA_BASE_URL}/api/chat",
             json={"model": CHAT_MODEL,
-                  "messages": _build_messages(question, hits, history, summary, procs),
+                  "messages": _build_messages(question, hits, history, summary, procs,
+                                             pieces),
                   "stream": False, "options": GEN_OPTIONS},
             timeout=600,
         )
@@ -523,6 +578,9 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
         text = _DRIFT_MSG.strip()
     else:
         text += _quote_warning(text, hits)
+        # en tête : un avertissement d'abrogation lu après coup ne protège
+        # personne
+        text = _bandeau_version(hits, text) + text
     # les fiches ne subissent ni le filtre de pertinence ni celui des
     # citations : elles n'ont ni score RRF ni numéro d'article à repérer
     sources = procedures.sources(procs) + _sources(_cited(_relevant(hits), text))
@@ -532,7 +590,8 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
 
 def answer_stream(question: str, k: int = 6, session_id: str | None = None,
                   history: list[dict] | None = None, matiere: str | None = None,
-                  strict: bool = False):
+                  strict: bool = False,
+                  attachment_ids: list[str] | None = None):
     """Générateur NDJSON : {"sources":[…]} puis {"delta":"…"}* puis {"done":true}.
     `history` explicite -> mode sans état (voir answer())."""
     question = (question or "").strip()
@@ -554,6 +613,10 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     search_q = condense_question(history, question)
     search_q, _ar = search_query_for(search_q, _llm)
     hits = search_laws(search_q, limit=k, matiere=matiere, strict=strict)
+    # Les pièces sont désignées par l'utilisateur, jamais devinées ; elles
+    # restent bornées à leur session (un identifiant deviné n'ouvre rien).
+    pieces = attachments.pour_contexte(session_id, attachment_ids or []) \
+        if (session_id and attachment_ids) else []
     procs = (procedures.chercher(search_q)
              if procedures.veut_une_procedure(question + " " + search_q) else [])
     shown = _relevant(hits)          # nombre variable selon la pertinence réelle
@@ -561,7 +624,7 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
                       "search_query": search_q},
                      ensure_ascii=False) + "\n"
 
-    if not hits and not procs:
+    if not hits and not procs and not pieces:
         yield json.dumps(
             {"delta": "لم أعثر على نصوص قانونية ذات صلة بسؤالك في المدوّنة الحالية."},
             ensure_ascii=False,
@@ -574,7 +637,8 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
         with requests.post(
             f"{OLLAMA_BASE_URL}/api/chat",
             json={"model": CHAT_MODEL,
-                  "messages": _build_messages(question, hits, history, summary, procs),
+                  "messages": _build_messages(question, hits, history, summary, procs,
+                                             pieces),
                   "stream": True, "options": GEN_OPTIONS},
             stream=True,
             timeout=600,
@@ -601,6 +665,13 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
     if warn:
         answer_text += warn
         yield json.dumps({"delta": warn}, ensure_ascii=False) + "\n"
+    # En streaming, le bandeau ne peut plus précéder un texte déjà parti ; on
+    # l'émet en clôture, mais toujours de façon imposée.
+    bandeau = _bandeau_version(hits, answer_text)
+    if bandeau:
+        answer_text += "\n\n" + bandeau
+        yield json.dumps({"delta": "\n\n" + bandeau},
+                         ensure_ascii=False) + "\n"
     # Liste DÉFINITIVE : uniquement les sources réellement mobilisées, et
     # aucune si le modèle déclare n'avoir rien trouvé — afficher des sources
     # inutilisées laissait croire à un ancrage qui n'existait pas.
