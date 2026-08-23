@@ -44,6 +44,14 @@ SYSTEM_PROMPT = """أنت مساعد قانوني مغربي محترف، خبي
 - كل مقطع في السياق يحمل وسم «المصدر» الذي يحدد القانون الذي ينتمي إليه، وقد يحمل رقم المادة/الفصل. اعتمد هذا الوسم ولا تفترض مصدراً آخر.
 - إذا لم تجد الجواب في النصوص المقدَّمة فقل بوضوح: «لم أعثر على نص قانوني مطبّق ضمن المدونة المتاحة»، واقترح إعادة صياغة السؤال إن كان ذلك مفيداً. لا تخترع أبداً مادةً أو رقماً أو مقتضى.
 
+## الاستنباط: واجب، لا محظور
+- ميّز بين اختراع قاعدة (ممنوع منعاً باتاً) واستنباط قاعدة من مجموع المقتضيات (واجب مهني، وهو صلب عمل القانوني).
+- كثير من القواعد لا يعبّر عنها المشرّع صراحةً بل يقرّرها بتنظيم الطريق إليها. إذا نصّت المقتضيات على أن «للمكري أن يطلب من المحكمة الحكم بالإفراغ»، فذلك يعني أن الإفراغ يمرّ وجوباً عبر القضاء، ولو لم ترد عبارة «يشترط حكم قضائي» في أي نص.
+- إسناد الاختصاص إلى جهة قضائية = اشتراط سلوك تلك الطريق. غياب الصياغة الصريحة ليس غياب القاعدة.
+- عندما تستنبط: اذكر القاعدة أولاً بوضوح، ثم قل صراحةً «هذا يُستنبط من» واذكر المقتضيات التي تؤسسها. على القارئ أن يميّز ما هو منقول عمّا هو مستنبط، ليعرف أين يتحقق.
+- احذر التعارض الظاهري: مقتضى يعفي من التعويض ليس مقتضى يعفي من الحكم. اقرأ ما ينظّمه النص فعلاً، لا ما يشبهه.
+- لا تقل «لم أعثر» إذا كانت المقتضيات المقدَّمة تحدد الجواب مجتمعةً: هذا امتناع عن الاجتهاد، لا احتياط.
+
 ## قواعد الاستشهاد (إلزامية)
 1. عند كل حكم تذكره: اذكر رقم المادة أو الفصل واسم القانون كما في وسم «المصدر» (مثال: المادة 41-1 من قانون المسطرة الجنائية).
 2. انتبه للإحالات: إذا ورد داخل النص «المادة X من مدونة التجارة» أو من قانون آخر، فهذه إحالة إلى قانون مختلف وليست مصدر المقطع؛ انسب المقطع إلى قانونه الصحيح وميّز الإحالة بوضوح.
@@ -71,6 +79,9 @@ SYSTEM_PROMPT = """أنت مساعد قانوني مغربي محترف، خبي
 
 ## المحادثة
 - إذا وُجد ملخص أو رسائل سابقة، فاستعملها لفهم سياق السؤال (الضمائر، «وماذا عن...»)، لكن الأحكام دائماً من نصوص السياق الحالي.
+- سؤال المتابعة يستحق جواباً جديداً، لا إعادةً لما سبق. أجوبتك السابقة سياقٌ للفهم، وليست قالباً تُعيد ملأه: لا تستنسخ بنيتها ولا عناوينها.
+- إذا كان السؤال مغلقاً («هل يلزم...؟»، «هل يجوز...؟»)، فابدأ بـ«نعم» أو «لا» صريحة في الجملة الأولى، ثم اذكر السند. الاستطراد قبل الحسم تهرّب.
+- إذا سأل المستعمل عن نقطة واحدة، فأجب عنها وحدها؛ لا تُعِد سرد المسطرة كاملة.
 - أجب بالعربية الفصحى. إذا سُئلت بالفرنسية فأجب بالفرنسية مع إبقاء الاستشهادات بأسمائها العربية الرسمية.
 - عند ترجمة مقتضى قانوني إلى الفرنسية: أورد النص العربي الأصلي حرفياً بين علامتي تنصيص متبوعاً بالترجمة، واستعمل المصطلحات القانونية المغربية الرسمية (dahir، procureur du Roi، mise en demeure...). الترجمة للفهم؛ والنص العربي وحده هو الحجة.
 
@@ -248,16 +259,11 @@ def _expert_note(h: dict) -> str:
 def _build_context(hits: list[dict], procs: list[dict] | None = None,
                    pieces: list[dict] | None = None) -> str:
     parts = []
-    # La marche à suivre passe avant les textes : c'est la réponse à la
-    # question posée, les articles n'en sont que le fondement.
     # Les pièces du dossier viennent en premier : elles portent les faits
     # sur lesquels la question se pose, les textes n'arrivent qu'ensuite.
     bloc_p = attachments.bloc_pieces(pieces or [])
     if bloc_p:
         parts.append(bloc_p)
-    bloc = procedures.bloc_procedures(procs or [])
-    if bloc:
-        parts.append(bloc)
     for i, h in enumerate(hits):
         art = h.get("article")
         art_lbl = f" — رقم المادة/الفصل: {art}" if art else ""
@@ -265,6 +271,21 @@ def _build_context(hits: list[dict], procs: list[dict] | None = None,
             f"[مقطع {i + 1}] المصدر: {h.get('law', '')}{art_lbl}\nالنص: {_expand(h)}"
             + _version_note(h) + _expert_note(h)
         )
+    # Les fiches du guide viennent APRÈS les articles, et non plus avant.
+    #
+    # Mesuré sur une vraie question — « مسطرة إفراغ مكتري » : placées en tête,
+    # elles écrasaient la loi. Le moteur a répondu par le circuit interne du
+    # greffe (réception du dossier, taxe judiciaire, frais de l'huissier) et a
+    # repris de la fiche un « ظهير 1980 » abrogé et un délai de quinze jours
+    # qui vaut pour le loyer impayé, alors que la reprise du logement pour
+    # habitation personnelle exige deux mois (article 46 de la loi 67.12).
+    #
+    # Une fiche décrit ce que fait le greffe une fois le jugement obtenu ;
+    # elle ne dit pas le droit applicable. Elle éclaire la marche à suivre,
+    # elle ne la fonde pas.
+    bloc = procedures.bloc_procedures(procs or [])
+    if bloc:
+        parts.append(bloc)
     return "\n\n".join(parts)
 
 
@@ -432,6 +453,62 @@ def _mots_loi(nom: str) -> set:
     mots = {m for m in re.sub(r"[^ء-ي\s]", " ", nom or "").split()
             if len(m) > 2 and m not in _MOTS_VIDES}
     return mots | numeros
+
+
+# « لا يحتاج إلى حكم »، « دون الحاجة إلى حكم قضائي », « بدون حكم »…
+_NIE_LE_JUGE = re.compile(
+    r"(?:لا\s*(?:يحتاج|تحتاج|يستلزم|يشترط)|دون\s*(?:الحاجة\s*(?:إلى|الى)\s*)?|"
+    r"بدون\s*|ليس\s*(?:هناك\s*)?حاجة\s*(?:إلى|الى)\s*)"
+    r"[^.،؛\n]{0,30}?(?:حكم|مقرر)\s*(?:قضائي|بالإفراغ|من\s*المحكمة)?")
+# Une disposition attribue compétence à une juridiction de bien des façons :
+# « يطلب من المحكمة », « يختص رئيس المحكمة », « تبين للجهة القضائية… قضت ».
+# Une séquence figée les manquait — notamment « يختص رئيس المحكمة في الطلب
+# الرامي إلى الإفراغ », qui est pourtant l'énoncé le plus net qui soit.
+# On cherche donc la COOCCURRENCE d'un organe judiciaire et d'un verbe de
+# saisine ou de jugement, sans imposer leur ordre.
+_ORGANE_JUDICIAIRE = re.compile(
+    r"المحكمة|رئيس\s*المحكمة|الجهة\s*القضائية|القضاء|القاضي|قاضي\s*المستعجلات")
+_VERBE_JUDICIAIRE = re.compile(
+    r"يختص|تختص|الاختصاص|يطلب|تطلب|يلجأ|ترفع|يرفع|تقدم\s*(?:إليها|إليه)|"
+    r"تقضي|يقضي|قضت|قضى|تحكم|يحكم|حكمت|تصرح|يصرح|تأمر|يأمر|تصدر|يصدر")
+
+
+def _donne_competence(texte: str) -> bool:
+    return bool(_ORGANE_JUDICIAIRE.search(texte or "")
+                and _VERBE_JUDICIAIRE.search(texte or ""))
+
+
+def _nie_la_voie_judiciaire(text: str, hits: list[dict]) -> str:
+    """La réponse écarte-t-elle le juge que les textes servis imposent ?
+
+    Mesuré en production : à « l'expulsion nécessite-t-elle un jugement ? », le
+    moteur a répondu « non, pas toujours » en s'appuyant sur un article qui
+    dispense d'INDEMNITÉ — pas de jugement. Deux dispositions du même corpus
+    donnaient pourtant compétence à la juridiction.
+
+    La consigne du prompt ne suffit pas : elle demande au modèle de ne pas
+    confondre, et il confond quand même. On vérifie donc après coup, sur les
+    passages réellement servis. Une expulsion sans titre exécutoire est une
+    voie de fait ; l'erreur ne peut pas passer.
+    """
+    if not _NIE_LE_JUGE.search(text or ""):
+        return ""
+    appuis = []
+    for h in hits:
+        t = h.get("text") or ""
+        if _donne_competence(t):
+            art = str(h.get("article") or "").strip()
+            loi = (h.get("law") or "").strip()[:46]
+            ref = f"{art} من {loi}" if art and art != "None" else loi
+            if ref and ref not in appuis:
+                appuis.append(ref)
+    if not appuis:
+        return ""
+    return ("\n\n⚠️ [تناقض محتمل] نفى هذا الجواب الحاجة إلى مقرر قضائي، في حين "
+            "أن من النصوص المقدَّمة ما يسند الاختصاص إلى المحكمة: "
+            + " ؛ ".join(appuis[:3]) +
+            ". إسناد الاختصاص إلى القضاء يعني وجوب سلوك هذه الطريق؛ "
+            "والإفراغ بغير سند تنفيذي اعتداء مادي. تحقق قبل الاعتماد.")
 
 
 def _attribution_douteuse(text: str, hits: list[dict]) -> str:
@@ -649,6 +726,7 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
     else:
         text += _quote_warning(text, hits)
         text += _attribution_douteuse(text, hits)
+        text += _nie_la_voie_judiciaire(text, hits)
         # en tête : un avertissement d'abrogation lu après coup ne protège
         # personne
         text = _bandeau_version(hits, text) + text
@@ -738,10 +816,11 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
         yield json.dumps({"delta": warn}, ensure_ascii=False) + "\n"
     # En streaming, le bandeau ne peut plus précéder un texte déjà parti ; on
     # l'émet en clôture, mais toujours de façon imposée.
-    faute = _attribution_douteuse(answer_text, hits)
-    if faute:
-        answer_text += faute
-        yield json.dumps({"delta": faute}, ensure_ascii=False) + "\n"
+    for verif in (_attribution_douteuse, _nie_la_voie_judiciaire):
+        faute = verif(answer_text, hits)
+        if faute:
+            answer_text += faute
+            yield json.dumps({"delta": faute}, ensure_ascii=False) + "\n"
     bandeau = _bandeau_version(hits, answer_text)
     if bandeau:
         answer_text += "\n\n" + bandeau

@@ -64,6 +64,96 @@ def _renvois(hit: dict) -> list[dict]:
     return brut or []
 
 
+# Un texte de loi cité comme cadre applicable : « ظهير 1980 المتعلق بـ… »,
+# « القانون رقم 67.12 », « مدونة الأسرة ».
+_TEXTE_CITE = re.compile(
+    r"(?:ظهير|القانون|قانون|مرسوم|مدونة)\s*"
+    r"(?:شريف\s*)?(?:رقم\s*)?"
+    r"((?:\d{1,3}(?:\.\d{2,3}){1,2})|(?:\d{4}))?"
+    r"([^.،؛()\n]{0,44})")
+# Les mots qui désignent l'espèce du texte ne distinguent aucun texte : ils
+# figurent dans des milliers de titres. Les garder faisait « retrouver »
+# n'importe quelle citation, puisqu'un « ظهير » ressemble à tous les autres.
+_MOTS_VIDES_LOI = {"شريف", "رقم", "المتعلق", "بمثابة", "الصادر", "بتنفيذ",
+                   "السالف", "الذكر", "أعلاه", "المذكور", "هذا", "هذه",
+                   "ظهير", "قانون", "القانون", "مرسوم", "المرسوم", "مدونة",
+                   "المدونة", "بشأن", "يتعلق", "المتعلقة", "الخاص", "العام",
+                   "بتاريخ", "صادر", "صيغة", "محينة", "نهائية"}
+
+
+def _identifiants(nom: str) -> set:
+    """Ce qui permet de reconnaître un texte : son numéro et ses mots propres."""
+    nums = set(re.findall(r"\d{1,3}(?:\.\d{2,3}){1,2}", nom or ""))
+    mots = {m for m in re.sub(r"[^ء-ي\s]", " ", nom or "").split()
+            if len(m) > 3 and m not in _MOTS_VIDES_LOI}
+    return nums | mots
+
+
+def references_invérifiables(hits: list[dict]) -> list[tuple[str, str]]:
+    """Textes cités par une fiche et introuvables dans le fonds documentaire.
+
+    Le guide date de 2024 et renvoie parfois à des textes remplacés depuis, ou
+    jamais versés au corpus. Le mécanisme de datation ne peut rien pour eux :
+    il lit le statut des documents ingérés, or ces textes-là n'y sont pas.
+
+    Constaté à « مسطرة إفراغ مكتري » : la fiche « الإفراغات » donne pour cadre
+    un « ظهير 1980 » absent du corpus — remplacé en réalité par la loi 67.12.
+    Le moteur l'a présenté comme le droit en vigueur.
+
+    Plutôt qu'une liste de textes périmés tenue à la main, matière par matière,
+    on pose une règle vérifiable : un cadre légal qu'on ne sait pas retrouver
+    ne peut pas être présenté comme applicable. La donnée décide, pas nous.
+    """
+    try:
+        from rag.hybrid import get_index
+        bm = get_index()
+    except Exception:                                    # noqa: BLE001
+        return []
+    if bm is None:
+        return []
+    # Comparer à la RÉUNION des identifiants du fonds ne vaut rien : un seul
+    # mot partagé suffirait. « ظهير 1980 المتعلق بالمحلات السكنية » passait
+    # pour retrouvé parce que « بالمحلات » figure dans la loi 67.12, qui est
+    # un tout autre texte. On confronte donc document par document.
+    numeros_connus, docs_connus = set(), []
+    vus = set()
+    for meta in bm.docs:
+        nom = f"{meta.get('law', '')} {meta.get('file', '')}"
+        if nom in vus:
+            continue
+        vus.add(nom)
+        ids = _identifiants(nom)
+        numeros_connus |= {i for i in ids if any(c.isdigit() for c in i)}
+        docs_connus.append(ids)
+    if not docs_connus:
+        return []
+
+    def retrouve(ids: set) -> bool:
+        """Le numéro tranche seul ; sinon il faut une vraie convergence."""
+        if {i for i in ids if any(c.isdigit() for c in i)} & numeros_connus:
+            return True
+        mots = {i for i in ids if not any(c.isdigit() for c in i)}
+        if len(mots) < 2:
+            return True          # trop peu d'éléments pour accuser
+        seuil = max(2, (len(mots) * 2 + 2) // 3)
+        return any(len(mots & d) >= seuil for d in docs_connus)
+
+    out = []
+    for h in hits:
+        if h.get("type") != "procedure":
+            continue
+        cadre = str(h.get("cadre_legal") or "")
+        for m in _TEXTE_CITE.finditer(cadre):
+            cite = m.group(0).strip(" .،؛")
+            ids = _identifiants(cite)
+            if not ids or retrouve(ids):
+                continue
+            couple = (h.get("titre", ""), cite[:70])
+            if couple not in out:
+                out.append(couple)
+    return out
+
+
 def avertissement(hits: list[dict]) -> str:
     """Avertissement nommé, construit à partir des fiches réellement servies.
 
@@ -74,6 +164,21 @@ def avertissement(hits: list[dict]) -> str:
     # son seul intitulé, sinon l'avertissement répète quatre fois la même fiche.
     # Clé (fiche, type de renvoi) : le guide cite tantôt des فصول, tantôt des
     # مواد. Écrire « الفصول » en dur ferait citer à faux l'un pour l'autre.
+    # Un cadre légal qu'on ne sait pas retrouver dans le fonds ne peut pas
+    # être présenté comme applicable. Règle vérifiable, valable pour toute
+    # matière — pas une liste de textes périmés tenue à la main.
+    introuvables = references_invérifiables(hits)
+    bandeau_perimes = ""
+    if introuvables:
+        bandeau_perimes = (
+            "\n[تنبيه إلزامي — إحالة غير مُتحقَّق منها]\n"
+            + " ؛ ".join(
+                f"تحيل مسطرة « {t} » إلى «{c}»، وهو نص لا يوجد في المدونة "
+                f"المتاحة" for t, c in introuvables)
+            + ". قد يكون منسوخا أو غير مُدرَج. لا تقدّمه على أنه القانون "
+              "الساري، وابحث عن النص المعمول به حاليا قبل الاعتماد على "
+              "الآجال والشروط الواردة في المسطرة.\n")
+
     par_fiche: dict[tuple[str, str, str], list[str]] = {}
     for h in hits:
         if h.get("type") != "procedure":
@@ -89,7 +194,7 @@ def avertissement(hits: list[dict]) -> str:
                 if a not in par_fiche[cle]:
                     par_fiche[cle].append(a)
     if not par_fiche:
-        return ""
+        return bandeau_perimes
     morceaux = []
     for (titre, fam, loi), arts in par_fiche.items():
         if not arts:
@@ -100,6 +205,7 @@ def avertissement(hits: list[dict]) -> str:
         morceaux.append(f"« {titre} » ({label} {'، '.join(nums)} من {loi})")
     liste = " ؛ ".join(morceaux)
     return (
+        bandeau_perimes +
         "\n[تنبيه إلزامي — نصوص متغيرة]\n"
         f"المساطر التالية مستمدة من دليل المساطر لسنة 2024، وتستند إلى نصوص "
         f"نُسخت: {liste}. النص الناسخ هو القانون رقم 58.25 المتعلق بالمسطرة "
