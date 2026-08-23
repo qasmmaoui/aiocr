@@ -12,7 +12,7 @@ avant réparation et après — et on compte ce qui se trouve.
 import json, re, sys
 
 AVANT = r"Y:\adala-project\pod_backup_20260819\data\laws_corpus_v2.jsonl"
-APRES = AVANT + ".repare.signale.courts"
+APRES = AVANT + ".repare.signale.courts.renvois.final"
 
 # références réellement présentes dans les codes, choisies sur le texte
 EPREUVES = [

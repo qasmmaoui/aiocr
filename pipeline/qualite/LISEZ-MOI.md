@@ -33,6 +33,19 @@ Trois preuves exigées : le retrait du préfixe restaure exactement la suite, le
 préfixes retirés forment eux-mêmes une suite croissante (les notes de bas de
 page se numérotent en montant), et la qualité de suite du document progresse.
 
+`p18_annuler_ambigus` — filet de sécurité en fin de chaîne. Deux numéros
+corrompus DIFFÉRENTS ramenés au même article, chacun portant son propre
+en-tête imprimé, signalent une résolution fautive. On rend alors les deux à
+leur état d'origine : une étiquette corrompue rend un article introuvable ;
+une étiquette fausse le fait répondre à la place d'un autre. Le second défaut
+est le plus grave.
+
+## L'ordre compte
+
+`p10` → `p11` → `p16` → `p17` → `p18`. Chaque passe lit la sortie de la
+précédente. Régénérer une passe amont sans rejouer la suite laisse la chaîne
+incohérente — c'est arrivé, et 150 corrections se sont perdues en silence.
+
 ## Une méthode écartée
 
 `p13_jumeaux` cherchait à résoudre les cas douteux par un second exemplaire du

@@ -50,6 +50,16 @@ journal = []
 
 for f, frags in docs.items():
     frags.sort(key=lambda x: (x[1].get("chunk") if isinstance(x[1].get("chunk"), int) else 0))
+    # Plafond de vraisemblance : un texte ne numérote pas au-delà de son
+    # dernier article. Sans lui, un suffixe trop long passait — « 12727 »
+    # devenait l'article 2727 d'une loi qui en compte moins de deux cents.
+    _dense = sorted({num_de(r.get("article")) for _, r in frags} - {None})
+    PLAFOND_DOC = 0
+    for _v in _dense:
+        if sum(1 for _d in range(-10, 11) if (_v + _d) in set(_dense)) >= 6:
+            PLAFOND_DOC = _v
+    PLAFOND_DOC = max(PLAFOND_DOC * 2, 120)
+
     presents = {num_de(r.get("article")) for _, r in frags} - {None}
     if not presents:
         continue
@@ -70,7 +80,14 @@ for f, frags in docs.items():
         if any((val + d) in presents for d in (-2, -1, 1, 2)):
             continue
         brut, t = m.group(1), r.get("text") or ""
+        # Les appels de note vivent au bas de la page et le découpage les
+        # sépare souvent de l'article auquel ils se rapportent : on les
+        # cherche aussi dans les fragments voisins. Sans cet élargissement,
+        # 888 cas restaient sans preuve — la note existait, ailleurs.
         notes = set(NOTE.findall(t))
+        for v in (k - 1, k + 1):
+            if 0 <= v < len(frags):
+                notes |= set(NOTE.findall(frags[v][1].get("text") or ""))
         entete = ETIQ.match(t)
         avant = apres = None
         for j, v in sains:
@@ -83,7 +100,7 @@ for f, frags in docs.items():
             if L >= len(brut):
                 continue
             suf, pre = brut[-L:], brut[:-L]
-            if suf.startswith("0"):
+            if suf.startswith("0") or int(suf) > PLAFOND_DOC:
                 continue
             cands.append((int(suf), pre))
         utiles = avant is not None and apres is not None and apres > avant

@@ -39,6 +39,15 @@ stats = collections.Counter()
 
 for f, lst in docs.items():
     lst.sort()
+    # Plafond de vraisemblance : un texte ne numérote pas au-delà de son
+    # dernier article réel. Sans lui, un suffixe trop long passe — « 12727 »
+    # devenait l'article 2727 d'une loi qui en compte moins de deux cents.
+    _vus = {int(b) for _, _, b, _ in lst}
+    PLAFOND_DOC = 0
+    for _v in sorted(_vus):
+        if sum(1 for _d in range(-10, 11) if (_v + _d) in _vus) >= 6:
+            PLAFOND_DOC = _v
+    PLAFOND_DOC = max(PLAFOND_DOC * 2, 120)
     courant, suspects = None, []
     for ch, i, brut, complet in lst:
         v = int(brut)
@@ -49,6 +58,8 @@ for f, lst in docs.items():
         for L in range(1, len(brut)):
             suf = brut[L:]
             if not suf or suf.startswith("0"):
+                continue
+            if int(suf) > PLAFOND_DOC:
                 continue
             if int(suf) == courant + 1:
                 trouve = (int(brut[:L]), int(suf), complet[len(brut):])

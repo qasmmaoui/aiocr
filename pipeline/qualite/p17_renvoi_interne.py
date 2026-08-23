@@ -37,21 +37,25 @@ for i, line in enumerate(open(C, encoding="utf-8")):
     if not anterieurs:
         stats["sans_renvoi"] += 1
         continue
-    plafond = max(anterieurs)
+    # Un fragment cite souvent plusieurs articles voisins — et parfois le sien.
+    # Exiger un rang strictement supérieur au plus grand renvoi excluait donc
+    # la bonne réponse : « المادة 98232 » cite 231 trois fois PUIS 232, et le
+    # plafond à 232 écartait le candidat 232 lui-même. On retient le voisinage
+    # des articles cités plutôt qu'un plancher.
+    bas, haut = min(anterieurs), max(anterieurs) + 3
     cands = []
     for L in range(1, len(brut)):
         suf = brut[L:]
         if not suf or suf.startswith("0"):
             continue
         v = int(suf)
-        # le rang courant suit le plus grand article cité comme antérieur
-        if plafond < v <= plafond + 3:
+        if bas <= v <= haut:
             cands.append((v, brut[:L]))
     if len(cands) == 1:
         stats["tranches"] += 1
-        corrections[i] = (cands[0][0], brut, cands[0][1], plafond)
+        corrections[i] = (cands[0][0], brut, cands[0][1], bas)
         if len(ex) < 8:
-            ex.append((brut, cands[0][0], cands[0][1], plafond,
+            ex.append((brut, cands[0][0], cands[0][1], bas,
                        (r.get("file") or "")[:42],
                        re.sub(r"\s+", " ", t)[:95]))
     else:
