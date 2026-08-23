@@ -13,6 +13,10 @@ lexical (`laws_corpus_v2.jsonl`) et n'écrivent jamais par-dessus l'original.
 | `p4b_dates_lois` | dates aberrantes dans les formules d'édiction |
 | `p6_doublons` | doublons exacts, troncatures, désactivations |
 | `p9_recompte` | distingue les codes réellement longs des numéros corrompus |
+| `p12_alignement` | l'étiquette `article` correspond-elle à l'en-tête imprimé |
+| `p13_jumeaux` | résolution par un second exemplaire du même code — **échec assumé** |
+| `p14_ordre` | documents où la suite des articles recule |
+| `p15_collages_courts` | collages invisibles : « 45 » = note 4 + article 5 |
 
 ## Traitement
 
@@ -23,6 +27,19 @@ des numéros ayant un voisin immédiat. Un code numérote en continu ; c'est le
 seul juge qui ne dépende d'aucune opinion.
 
 `p11_signaler` — marque les fragments douteux sans réécrire le texte.
+
+`p16_reparer_courts` — répare les collages courts, indiscernables à l'œil nu.
+Trois preuves exigées : le retrait du préfixe restaure exactement la suite, les
+préfixes retirés forment eux-mêmes une suite croissante (les notes de bas de
+page se numérotent en montant), et la qualité de suite du document progresse.
+
+## Une méthode écartée
+
+`p13_jumeaux` cherchait à résoudre les cas douteux par un second exemplaire du
+même code. Elle ne tranche que 3 cas, dont un FAUX : la loi 37.10 sur la
+protection des témoins reproduit mot pour mot le texte qu'elle insère dans le
+code de procédure pénale. L'identité de contenu ne prouve donc pas l'identité
+de numérotation. Conservée comme trace, pas utilisée.
 
 ## Pourquoi on répare les numéros mais pas les dates
 
