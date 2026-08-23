@@ -406,6 +406,76 @@ def _qnorm(s: str) -> str:
     return re.sub(r"[^؀-ۿ0-9]", "", s)
 
 
+# « المادة 31 من قانون الجنسية » — un article, puis le texte auquel la réponse
+# le rattache. On borne à 60 caractères : au-delà, ce n'est plus un nom de loi.
+# Le point termine une phrase, mais il sépare aussi les tranches d'un numéro
+# de loi — « 22.01 ». On ne l'accepte donc qu'immédiatement suivi d'un chiffre,
+# sans quoi « القانون رقم 12.34 » se réduisait à « القانون رقم 12 », privé de
+# ce qui l'identifie.
+_ATTRIB_RE = re.compile(
+    r"(?:المادة|الفصل)\s*(\d{1,4}(?:[-.]\d{1,3})?)\s*من\s+"
+    r"((?:[^،؛()\n.]|\.(?=\d)){4,60})")
+# Mots qui ne distinguent aucune loi : les comparer ferait crier au loup.
+_MOTS_VIDES = {"قانون", "القانون", "مدونة", "المدونة", "ظهير", "الظهير",
+               "مرسوم", "المرسوم", "هذا", "هذه", "نفس", "أعلاه", "المذكور",
+               "السالف", "الذكر", "رقم", "المتعلق", "بمثابة", "الشريف"}
+
+
+def _mots_loi(nom: str) -> set:
+    """Ce qui identifie vraiment un texte : ses mots propres ET son numéro.
+
+    Une loi marocaine se désigne d'abord par son numéro — 22.01, 1.74.447. Le
+    retirer laissait « القانون رقم 12.34 » sans rien de discriminant, donc
+    impossible à confronter.
+    """
+    numeros = set(re.findall(r"\d{1,3}(?:\.\d{2,3}){1,2}", nom or ""))
+    mots = {m for m in re.sub(r"[^ء-ي\s]", " ", nom or "").split()
+            if len(m) > 2 and m not in _MOTS_VIDES}
+    return mots | numeros
+
+
+def _attribution_douteuse(text: str, hits: list[dict]) -> str:
+    """Chaque article cité est-il rattaché au bon texte ?
+
+    Mesuré sur une réponse réelle : le moteur avait servi le الفصل 31 du code
+    de procédure civile de 1974, et le modèle l'a présenté comme « الفصل 31 من
+    قانون الجنسية المغربية » — le nom emprunté à un passage voisin du contexte.
+    La règle 2 du prompt système interdit pourtant cela mot pour mot.
+
+    On ne peut pas empêcher la faute, on peut refuser de la laisser passer :
+    pour chaque « article N من X » de la réponse, on cherche le passage servi
+    qui porte l'article N et on compare le texte auquel il appartient.
+    """
+    par_article = {}
+    for h in hits:
+        art = str(h.get("article") or "").strip()
+        m = re.search(r"(\d{1,4}(?:[-.]\d{1,3})?)", art)
+        if m:
+            par_article.setdefault(m.group(1), set()).add(h.get("law") or "")
+    if not par_article:
+        return ""
+    fautes = []
+    for m in _ATTRIB_RE.finditer(text or ""):
+        num, loi_dite = m.group(1), m.group(2).strip()
+        lois_reelles = par_article.get(num)
+        if not lois_reelles:
+            continue                       # article non servi : hors sujet ici
+        dits = _mots_loi(loi_dite)
+        if not dits:
+            continue
+        if any(dits & _mots_loi(l) for l in lois_reelles):
+            continue                       # au moins un mot de loi en commun
+        vraie = sorted(lois_reelles, key=len)[0][:60]
+        fautes.append((num, loi_dite[:50], vraie))
+    if not fautes:
+        return ""
+    lignes = "؛ ".join(
+        f"«{'المادة'} {n} من {dit}» ← المصدر المقدَّم هو «{vrai}»"
+        for n, dit, vrai in fautes[:4])
+    return ("\n\n⚠️ [تحقق من الإسناد] نسب هذا الجواب مقتضى إلى نص غير الذي ورد "
+            f"في السياق: {lignes}. راجع النص الأصلي قبل الاعتماد على الإحالة.")
+
+
 def _bandeau_version(hits: list[dict], text: str) -> str:
     """Bandeau d'abrogation imposé, indépendamment de l'obéissance du modèle.
 
@@ -578,6 +648,7 @@ def answer(question: str, k: int = 6, session_id: str | None = None,
         text = _DRIFT_MSG.strip()
     else:
         text += _quote_warning(text, hits)
+        text += _attribution_douteuse(text, hits)
         # en tête : un avertissement d'abrogation lu après coup ne protège
         # personne
         text = _bandeau_version(hits, text) + text
@@ -667,6 +738,10 @@ def answer_stream(question: str, k: int = 6, session_id: str | None = None,
         yield json.dumps({"delta": warn}, ensure_ascii=False) + "\n"
     # En streaming, le bandeau ne peut plus précéder un texte déjà parti ; on
     # l'émet en clôture, mais toujours de façon imposée.
+    faute = _attribution_douteuse(answer_text, hits)
+    if faute:
+        answer_text += faute
+        yield json.dumps({"delta": faute}, ensure_ascii=False) + "\n"
     bandeau = _bandeau_version(hits, answer_text)
     if bandeau:
         answer_text += "\n\n" + bandeau
